@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PIO BINDAS Turntable</title>
+<style>
+  :root { --bg: #0b111c; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; object-fit: contain; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { Reflector } from './vendor/Reflector.js';
+
+// ---------------------------------------------------------------------------
+// Settings. ?render puts the page in frame-by-frame mode for render.mjs.
+// ---------------------------------------------------------------------------
+const params = new URLSearchParams(location.search);
+const RENDER_MODE = params.has('render');
+const WIDTH = +(params.get('w') || 1920);
+const HEIGHT = +(params.get('h') || 1080);
+const DURATION = 12; // seconds for one full 360° turn
+
+const mm = (v) => v / 1000; // model is built in millimetres, scene is in metres
+
+// Machine dimensions (mm). Front view: 1 px of reference/front.png ~= 1 mm.
+const BODY_W = 906, BODY_H = 818, BODY_D = 604;
+const HEAD_W = 920, HEAD_Y0 = 598, HEAD_DEPTH = 48;
+const PANEL_Y0 = 118, PANEL_Y1 = 598;
+const TRAY_W = 986, TRAY_H = 93, TRAY_DEPTH = 180;
+const FEET = 12;
+const FRONT_Z = BODY_D / 2;
+const PHOTO_CX = 510; // x of the machine centre line in front.png
+const PHOTO_FLOOR = 918; // y of the floor line in front.png
+const VALVE_X = [146, 218, 289, 361, 433, 517, 589, 660, 732, 806];
+const PLATFORM_R = 0.78, PLATFORM_H = 0.058, BASE_H = 0.012;
+
+// ---------------------------------------------------------------------------
+// Renderer / scene / camera
+// ---------------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: RENDER_MODE });
+renderer.setPixelRatio(RENDER_MODE ? 1 : Math.min(devicePixelRatio, 2));
+renderer.setSize(WIDTH, HEIGHT, false);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+document.body.appendChild(renderer.domElement);
+const maxAniso = renderer.capabilities.getMaxAnisotropy();
+
+const scene = new THREE.Scene();
+const FOG = new THREE.Color('#111926');
+scene.fog = new THREE.Fog(FOG, 6, 14);
+scene.background = gradientBackground();
+
+const camera = new THREE.PerspectiveCamera(26, WIDTH / HEIGHT, 0.1, 50);
+camera.position.set(0, 1.02, 3.35);
+camera.lookAt(0, 0.44, 0);
+
+
+// ---------------------------------------------------------------------------
+// Procedural textures (canvas)
+// ---------------------------------------------------------------------------
+function rand(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+
+function canvasTex(w, h, draw, srgb = true) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = maxAniso;
+  return t;
+}
+
+function drawBrushed(g, w, h, seed, base = 190, spread = 26, vertical = false) {
+  const r = rand(seed);
+  g.fillStyle = `rgb(${base},${base + 3},${base + 7})`; g.fillRect(0, 0, w, h);
+  const n = vertical ? w : h;
+  for (let i = 0; i < n * 3; i++) {
+    const p = r() * n, v = base + (r() - 0.5) * spread * 2;
+    g.fillStyle = `rgba(${v | 0},${(v + 3) | 0},${(v + 7) | 0},${0.25 + r() * 0.35})`;
+    const len = (0.2 + r() * 0.8) * (vertical ? h : w), off = r() * (vertical ? h : w);
+    if (vertical) g.fillRect(p, off - len / 2, 1, len); else g.fillRect(off - len / 2, p, len, 1);
+  }
+}
+
+function steelTex(seed, w = 1024, h = 1024) {
+  return canvasTex(w, h, (g, W, H) => drawBrushed(g, W, H, seed));
+}
+
+function screw(g, x, y, r) {
+  const gr = g.createRadialGradient(x - r * 0.3, y - r * 0.3, r * 0.1, x, y, r);
+  gr.addColorStop(0, '#e8ebee'); gr.addColorStop(1, '#6d7278');
+  g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = 'rgba(40,44,50,.7)'; g.lineWidth = r * 0.25;
+  g.beginPath(); g.moveTo(x - r * 0.5, y); g.lineTo(x + r * 0.5, y); g.stroke();
+}
+
+function grille(g, x, y, w, h, s) {
+  // Blue plastic ventilation grille like the ones in the side photos.
+  const R = 14 * s;
+  g.fillStyle = '#1537c9'; roundRect(g, x, y, w, h, R); g.fill();
+  g.strokeStyle = '#2b52f0'; g.lineWidth = 3 * s; roundRect(g, x + 2 * s, y + 2 * s, w - 4 * s, h - 4 * s, R); g.stroke();
+  const pad = 18 * s, cols = Math.round((w - 2 * pad) / (26 * s)), rows = Math.round((h - 2 * pad) / (9 * s));
+  const cw = (w - 2 * pad) / cols, rh = (h - 2 * pad) / rows;
+  for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
+    g.fillStyle = '#081446'; g.fillRect(x + pad + i * cw + 1.5 * s, y + pad + j * rh + 1.5 * s, cw - 3 * s, rh - 3 * s);
+    g.fillStyle = 'rgba(80,120,255,.35)'; g.fillRect(x + pad + i * cw + 1.5 * s, y + pad + j * rh + rh - 2.5 * s, cw - 3 * s, 1 * s);
+  }
+  screw(g, x + w * 0.2, y + 8 * s, 3.5 * s); screw(g, x + w * 0.8, y + 8 * s, 3.5 * s);
+  screw(g, x + w * 0.2, y + h - 8 * s, 3.5 * s); screw(g, x + w * 0.8, y + h - 8 * s, 3.5 * s);
+}
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+
+// Rear panel: brushed steel, upper/lower panel seam, wide horizontal grille
+// (as seen in the top/rear reference view), corner screws.
+function rearTex() {
+  const s = 2; // px per mm
+  return canvasTex(BODY_W * s, BODY_H * s, (g, W, H) => {
+    drawBrushed(g, W, H, 7);
+    const seam = (BODY_H - 470) * s; // seam between upper and lower panel
+    g.fillStyle = 'rgba(30,34,40,.85)'; g.fillRect(0, seam, W, 2 * s);
+    g.fillStyle = 'rgba(255,255,255,.35)'; g.fillRect(0, seam + 2 * s, W, 1 * s);
+    for (const [x, y] of [[14, 14], [BODY_W - 14, 14], [14, BODY_H - 470 - 12], [BODY_W - 14, BODY_H - 470 - 12],
+      [14, BODY_H - 470 + 14], [BODY_W - 14, BODY_H - 470 + 14], [14, BODY_H - 14], [BODY_W - 14, BODY_H - 14]])
+      screw(g, x * s, y * s, 4 * s);
+  });
+}
+
+// Drip-tray grate: stainless with rows of slots.
+function grateTex() {
+  const s = 2, w = TRAY_W - 24, h = TRAY_DEPTH - 24;
+  return canvasTex(w * s, h * s, (g, W, H) => {
+    drawBrushed(g, W, H, 11, 175, 20);
+    g.fillStyle = '#15181c';
+    for (let y = 14; y < h - 10; y += 16) for (let x = 12; x < w - 20; x += 9) {
+      roundRect(g, x * s, y * s, 4.2 * s, 11 * s, 2 * s); g.fill();
+    }
+    g.fillStyle = '#0d0f12'; g.beginPath(); g.arc(W / 2, H / 2, 9 * s, 0, Math.PI * 2); g.fill();
+  });
+}
+
+// Turntable top: matte black with fine concentric machining and edge index marks,
+// so the rotation of the platform itself reads clearly.
+function platformTex() {
+  return canvasTex(2048, 2048, (g, W, H) => {
+    const c = W / 2, r = rand(3);
+    g.fillStyle = '#16181c'; g.fillRect(0, 0, W, H);
+    for (let rad = 20; rad < c; rad += 3) {
+      const v = 22 + r() * 10;
+      g.strokeStyle = `rgba(${v},${v + 1},${v + 4},.55)`; g.lineWidth = 1.2;
+      g.beginPath(); g.arc(c, c, rad, 0, Math.PI * 2); g.stroke();
+    }
+    g.strokeStyle = 'rgba(150,160,175,.35)'; g.lineWidth = 5;
+    g.beginPath(); g.arc(c, c, c * 0.93, 0, Math.PI * 2); g.stroke();
+    for (let i = 0; i < 72; i++) {
+      const a = (i / 72) * Math.PI * 2, long = i % 6 === 0;
+      const r0 = c * (long ? 0.945 : 0.955), r1 = c * 0.985;
+      g.strokeStyle = long ? 'rgba(200,210,225,.6)' : 'rgba(150,160,175,.35)'; g.lineWidth = long ? 6 : 3;
+      g.beginPath(); g.moveTo(c + Math.cos(a) * r0, c + Math.sin(a) * r0);
+      g.lineTo(c + Math.cos(a) * r1, c + Math.sin(a) * r1); g.stroke();
+    }
+  });
+}
+
+function gradientBackground() {
+  return canvasTex(16, 512, (g, W, H) => {
+    const gr = g.createLinearGradient(0, 0, 0, H);
+    gr.addColorStop(0, '#05080f'); gr.addColorStop(0.45, '#0d1422'); gr.addColorStop(0.62, '#111926'); gr.addColorStop(1, '#0a0e16');
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Studio environment for reflections: dark room with softboxes.
+// ---------------------------------------------------------------------------
+function buildEnvironment() {
+  const env = new THREE.Scene();
+  env.add(new THREE.Mesh(new THREE.BoxGeometry(20, 12, 20),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.018, 0.022, 0.035), side: THREE.BackSide })));
+  const box = (w, h, pos, look, k) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(k, k, k * 1.03), side: THREE.DoubleSide }));
+    m.position.set(...pos); m.lookAt(...look); env.add(m);
+  };
+  box(6, 3, [0, 5.8, 0], [0, 0, 0], 3.2);          // overhead softbox
+  box(1.2, 6, [-7, 2.5, 3], [0, 1, 0], 4.5);       // left strip
+  box(1.2, 6, [7, 2.5, 3], [0, 1, 0], 4.5);        // right strip
+  box(3.5, 4, [-8, 2, -1], [0, 1, 0], 1.6);        // broad side panels
+  box(3.5, 4, [8, 2, -1], [0, 1, 0], 1.6);
+  box(8, 3, [0, 4.5, -8], [0, 1, 0], 1.4);         // high backdrop panel
+  box(6, 3, [0, 2.2, 8], [0, 1, 0], 2.4);          // soft front fill
+  box(1, 6, [-6, 2.5, -6], [0, 1, 0], 3.0);        // rear rims
+  box(1, 6, [6, 2.5, -6], [0, 1, 0], 3.0);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const rt = pmrem.fromScene(env, 0.02);
+  pmrem.dispose();
+  return rt.texture;
+}
+scene.environment = buildEnvironment();
+scene.environmentIntensity = 1.0;
+
+// ---------------------------------------------------------------------------
+// Lights
+// ---------------------------------------------------------------------------
+scene.add(new THREE.HemisphereLight('#b8c6e0', '#0b0f18', 0.35));
+
+const key = new THREE.DirectionalLight('#fff6ec', 2.4);
+key.position.set(-2.2, 4.2, 3.0);
+key.castShadow = true;
+key.shadow.mapSize.set(4096, 4096);
+key.shadow.camera.left = -1.4; key.shadow.camera.right = 1.4;
+key.shadow.camera.top = 1.4; key.shadow.camera.bottom = -1.4;
+key.shadow.camera.near = 1; key.shadow.camera.far = 10;
+key.shadow.bias = -0.0003; key.shadow.normalBias = 0.01; key.shadow.radius = 6;
+scene.add(key);
+
+const fill = new THREE.DirectionalLight('#dfe8ff', 0.9);
+fill.position.set(3, 1.6, 2.5); scene.add(fill);
+
+for (const x of [-1, 1]) { // soft rim lights from behind
+  const rim = new THREE.SpotLight('#cfe0ff', 26, 9, Math.PI / 12, 0.9, 1.5);
+  rim.position.set(2.4 * x, 2.6, -2.4); rim.target.position.set(0, 0.62, 0);
+  scene.add(rim, rim.target);
+}
+
+// ---------------------------------------------------------------------------
+// Floor: subtle reflection under a translucent dark satin surface.
+// ---------------------------------------------------------------------------
+const mirror = new Reflector(new THREE.CircleGeometry(12, 96), {
+  textureWidth: Math.min(WIDTH, 2048), textureHeight: Math.min(HEIGHT, 1152), color: 0x7a8494,
+});
+mirror.rotation.x = -Math.PI / 2; scene.add(mirror);
+const floor = new THREE.Mesh(new THREE.CircleGeometry(12, 96),
+  new THREE.MeshStandardMaterial({ color: '#0b1220', roughness: 0.55, metalness: 0.0, transparent: true, opacity: 0.93 }));
+floor.rotation.x = -Math.PI / 2; floor.position.y = 0.001; floor.receiveShadow = true; scene.add(floor);
+
+// ---------------------------------------------------------------------------
+// Turntable: stationary base ring + rotating platform.
+// ---------------------------------------------------------------------------
+const gunmetal = new THREE.MeshStandardMaterial({ color: '#3a3f47', metalness: 1, roughness: 0.32 });
+const base = new THREE.Mesh(new THREE.CylinderGeometry(PLATFORM_R - 0.03, PLATFORM_R + 0.01, BASE_H, 160),
+  new THREE.MeshStandardMaterial({ color: '#0c0d10', roughness: 0.6 }));
+base.position.y = BASE_H / 2; base.castShadow = base.receiveShadow = true; scene.add(base);
+const led = new THREE.Mesh(new THREE.TorusGeometry(PLATFORM_R - 0.012, 0.0022, 8, 240),
+  new THREE.MeshBasicMaterial({ color: new THREE.Color(0.55, 0.75, 1.6) }));
+led.rotation.x = Math.PI / 2; led.position.y = BASE_H + 0.001; scene.add(led);
+
+const turntable = new THREE.Group();
+turntable.position.y = BASE_H;
+scene.add(turntable);
+
+const platTop = new THREE.MeshStandardMaterial({ map: platformTex(), color: '#ffffff', roughness: 0.62, metalness: 0.35 });
+const platSide = new THREE.MeshStandardMaterial({ color: '#23262b', roughness: 0.4, metalness: 0.9 });
+const disc = new THREE.Mesh(new THREE.CylinderGeometry(PLATFORM_R, PLATFORM_R, PLATFORM_H - 0.006, 200), [platSide, platTop, platSide]);
+disc.position.y = (PLATFORM_H - 0.006) / 2; disc.castShadow = disc.receiveShadow = true; turntable.add(disc);
+const bevel = new THREE.Mesh(new THREE.TorusGeometry(PLATFORM_R - 0.003, 0.004, 12, 240), gunmetal);
+bevel.rotation.x = Math.PI / 2; bevel.position.y = PLATFORM_H - 0.006; turntable.add(bevel);
+const bevelLow = bevel.clone(); bevelLow.position.y = 0.004; turntable.add(bevelLow);
+
+// ---------------------------------------------------------------------------
+// The machine — one solid 3D object, reconstructed from the reference views.
+// ---------------------------------------------------------------------------
+const loader = new THREE.TextureLoader();
+const pending = [];
+function photo(name) {
+  let done;
+  pending.push(new Promise((res) => { done = res; }));
+  const t = loader.load(`./textures/${name}.png`, done, undefined, done);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = maxAniso;
+  return t;
+}
+function photoMat(name) {
+  const t = photo(name);
+  // The photos already carry studio shading, so light them only partly and
+  // let a little emissive keep the printed branding true to the reference.
+  return new THREE.MeshStandardMaterial({ map: t, emissiveMap: t, emissive: '#ffffff', emissiveIntensity: 0.22,
+    roughness: 0.42, metalness: 0.35 });
+}
+
+const steel = (seed) => new THREE.MeshStandardMaterial({ map: steelTex(seed), color: '#e4e8ec', metalness: 1, roughness: 0.36, envMapIntensity: 2.2 });
+const steelBody = steel(1), steelHead = steel(2), steelTray = steel(3);
+const blackPlastic = new THREE.MeshStandardMaterial({ color: '#131417', roughness: 0.38, metalness: 0.1 });
+const chrome = new THREE.MeshStandardMaterial({ color: '#ffffff', metalness: 1, roughness: 0.08 });
+
+const machine = new THREE.Group();
+machine.position.set(0, PLATFORM_H, mm(-(TRAY_DEPTH) / 2 + 12)); // centre the full footprint on the platform
+turntable.add(machine);
+
+function add(mesh, parent = machine) { mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh); return mesh; }
+function boxAt(w, h, d, x, y, z, mat) { // x,y,z = centre, all mm
+  const m = new THREE.Mesh(new THREE.BoxGeometry(mm(w), mm(h), mm(d)), mat);
+  m.position.set(mm(x), mm(y), mm(z)); return add(m);
+}
+function plane(w, h, mat, x, y, z, ry = 0, rx = 0) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(mm(w), mm(h)), mat);
+  m.position.set(mm(x), mm(y), mm(z)); m.rotation.set(rx, ry, 0, 'YXZ');
+  m.receiveShadow = true; machine.add(m); return m;
+}
+
+const lift = FEET;
+// Main body
+boxAt(BODY_W, BODY_H, BODY_D, 0, lift + BODY_H / 2, 0, steelBody);
+// Side panels (photos): +x = right side when facing the front, -x = left side.
+plane(BODY_D, BODY_H, photoMat('side_right'), BODY_W / 2 + 0.6, lift + BODY_H / 2, 0, Math.PI / 2);
+plane(BODY_D, BODY_H, photoMat('side_left'), -BODY_W / 2 - 0.6, lift + BODY_H / 2, 0, -Math.PI / 2);
+// Rear panel
+plane(BODY_W, BODY_H, new THREE.MeshStandardMaterial({ map: rearTex(), metalness: 1, roughness: 0.36, envMapIntensity: 2.2 }),
+  0, lift + BODY_H / 2, -BODY_D / 2 - 0.6, Math.PI);
+plane(BODY_W - 140, 150, new THREE.MeshStandardMaterial({ map: canvasTex((BODY_W - 140) * 2, 300, (g, W, H) => grille(g, 0, 0, W, H, 2)),
+  transparent: true, roughness: 0.5, metalness: 0 }), 0, lift + BODY_H - 70 - 75, -BODY_D / 2 - 1.4, Math.PI);
+// Front tap/advert panel (photo)
+plane(BODY_W, PANEL_Y1 - PANEL_Y0, photoMat('front_panel'), 0, lift + (PANEL_Y0 + PANEL_Y1) / 2, FRONT_Z + 0.6);
+
+// Branded header (protrudes forward over the valves)
+const headH = BODY_H - HEAD_Y0;
+boxAt(HEAD_W, headH, HEAD_DEPTH + 4, 0, lift + HEAD_Y0 + headH / 2, FRONT_Z + HEAD_DEPTH / 2 - 2, steelHead);
+plane(HEAD_W, headH, photoMat('front_header'), 0, lift + HEAD_Y0 + headH / 2, FRONT_Z + HEAD_DEPTH + 0.6);
+
+// Drip tray with slotted grate
+boxAt(TRAY_W, TRAY_H, TRAY_DEPTH + 20, 0, lift + TRAY_H / 2, FRONT_Z + TRAY_DEPTH / 2 - 10, steelTray);
+plane(TRAY_W, TRAY_H, photoMat('tray_front'), 0, lift + TRAY_H / 2, FRONT_Z + TRAY_DEPTH + 0.6);
+plane(TRAY_W - 24, TRAY_DEPTH - 24,
+  new THREE.MeshStandardMaterial({ map: grateTex(), metalness: 0.9, roughness: 0.35 }),
+  0, lift + TRAY_H + 0.6, FRONT_Z + TRAY_DEPTH / 2, 0, -Math.PI / 2);
+
+// Rubber feet
+const footGeo = new THREE.CylinderGeometry(mm(26), mm(30), mm(FEET), 32);
+for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+  const f = new THREE.Mesh(footGeo, blackPlastic);
+  f.position.set(mm(sx * (BODY_W / 2 - 60)), mm(FEET / 2), mm(sz * (BODY_D / 2 - 60))); add(f);
+}
+
+// Ten post-mix dispensing valves: 3D housings with the photographed labels.
+const nozzleGeo = new THREE.CylinderGeometry(mm(11), mm(14), mm(30), 24);
+for (let i = 0; i < VALVE_X.length; i++) {
+  const cx = VALVE_X[i] + 30 - PHOTO_CX;
+  const yTop = PHOTO_FLOOR - 379, yBot = PHOTO_FLOOR - 487;
+  const vd = 64;
+  boxAt(60, yTop - yBot, vd, cx, lift + (yTop + yBot) / 2, FRONT_Z + vd / 2, blackPlastic);
+  plane(60, yTop - yBot, photoMat(`valve_${i}`), cx, lift + (yTop + yBot) / 2, FRONT_Z + vd + 0.6);
+  // nozzle
+  const n = new THREE.Mesh(nozzleGeo, blackPlastic);
+  n.position.set(mm(cx), mm(lift + yBot - 15), mm(FRONT_Z + 30)); add(n);
+  // push lever hanging below the valve
+  const lx = cx + 11, ly0 = PHOTO_FLOOR - 599, ly1 = yBot - 4;
+  boxAt(7, ly1 - ly0, 7, lx, lift + (ly0 + ly1) / 2, FRONT_Z + 50, blackPlastic);
+  boxAt(7, 7, 18, lx, lift + ly0 + 3, FRONT_Z + 44, blackPlastic);
+  boxAt(6, 30, 6, cx, lift + yBot - 2, FRONT_Z + 50, blackPlastic).rotation.x = 0.35;
+}
+
+// Two chrome soda-water taps with black lever handles.
+function tap(photoX) {
+  const g = new THREE.Group();
+  const x = photoX - PHOTO_CX;
+  const cyl = (r0, r1, h, mat, seg = 32) => new THREE.Mesh(new THREE.CylinderGeometry(mm(r0), mm(r1), mm(h), seg), mat);
+  const shank = cyl(12, 12, 60, chrome); shank.rotation.x = Math.PI / 2; shank.position.set(0, mm(470), mm(30)); add(shank, g);
+  const flange = cyl(20, 20, 6, chrome); flange.rotation.x = Math.PI / 2; flange.position.set(0, mm(470), mm(3)); add(flange, g);
+  const body = cyl(14, 14, 64, chrome); body.position.set(0, mm(472), mm(62)); add(body, g);
+  const spout = cyl(8, 9.5, 42, chrome); spout.position.set(0, mm(424), mm(64)); add(spout, g);
+  const collar = cyl(10, 12, 12, chrome); collar.position.set(0, mm(510), mm(62)); add(collar, g);
+  const handle = cyl(15, 8, 92, blackPlastic); handle.position.set(0, mm(561), mm(62)); add(handle, g);
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(mm(15), 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), blackPlastic);
+  cap.position.set(0, mm(607), mm(62)); add(cap, g);
+  g.position.set(mm(x), mm(lift), mm(FRONT_Z)); machine.add(g);
+}
+tap(111); tap(904);
+
+// ---------------------------------------------------------------------------
+// Animation
+// ---------------------------------------------------------------------------
+function setTime(t) {
+  // Platform (and the machine standing on it) rotates clockwise seen from above:
+  // front -> right side -> rear -> left side -> front.
+  turntable.rotation.y = -((t % DURATION) / DURATION) * Math.PI * 2;
+}
+
+window.ready = Promise.all(pending).then(() => new Promise((r) => setTimeout(r, 100)));
+
+if (RENDER_MODE) {
+  window.renderFrame = async (i, total, type = 'image/png', quality) => {
+    setTime((i / total) * DURATION);
+    renderer.render(scene, camera);
+    return renderer.domElement.toDataURL(type, quality);
+  };
+} else {
+  let paused = false, t = 0, last = performance.now();
+  addEventListener('click', () => { paused = !paused; });
+  addEventListener('resize', () => {
+    renderer.setSize(innerWidth, innerHeight, false);
+    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  });
+  dispatchEvent(new Event('resize'));
+  renderer.setAnimationLoop((now) => {
+    if (!paused) t += (now - last) / 1000;
+    last = now; setTime(t); renderer.render(scene, camera);
+  });
+}
+</script>
+</body>
+</html>

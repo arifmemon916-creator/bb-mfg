@@ -1,0 +1,4 @@
+node_modules/
+turntable/out/frames-*/
+turntable/out/test*/
+turntable/out/*.log

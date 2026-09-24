@@ -1,5 +1,5 @@
 // Renders the turntable frame by frame in headless Chromium and encodes an MP4.
-//   node render.mjs [--w 3840 --h 2160 --fps 30 --out out/pio-bindas-turntable-4k.mp4 --frames N]
+//   node render.mjs --machine pio-10-valve [--w 3840 --h 2160 --fps 30 --out file.mp4 --frames N]
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,12 +13,13 @@ const W = +arg('w', 3840), H = +arg('h', 2160), FPS = +arg('fps', 30), SECONDS =
 const TOTAL = FPS * SECONDS;
 const LIMIT = +arg('frames', TOTAL);
 const ONLY = arg('only') ? arg('only').split(',').map(Number) : null; // preview specific frames
-const OUT = path.resolve(here, arg('out', `out/pio-bindas-turntable-${H >= 2160 ? '4k' : H + 'p'}.mp4`));
-const FRAMES = path.resolve(here, arg('framesDir', `out/frames-${H}`));
+const MACHINE = arg('machine', 'pio-10-valve');
+const OUT = path.resolve(here, arg('out', `out/${MACHINE}-turntable-${H >= 2160 ? '4k' : H + 'p'}.mp4`));
+const FRAMES = path.resolve(here, arg('framesDir', `out/preview-${MACHINE}`));
 const FFMPEG = process.env.FFMPEG || 'ffmpeg';
 if (process.argv.includes('--only')) fs.mkdirSync(FRAMES, { recursive: true });
 
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.png': 'image/png' };
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.png': 'image/png', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
   const f = path.join(here, decodeURIComponent(new URL(req.url, 'http://x').pathname));
   if (!f.startsWith(here) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end(); }
@@ -31,7 +32,7 @@ const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--ena
 const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
 page.on('console', (m) => console.log('[page]', m.text()));
 page.on('pageerror', (e) => { console.error('[page error]', e); process.exit(1); });
-await page.goto(`http://localhost:${port}/index.html?render&w=${W}&h=${H}`);
+await page.goto(`http://localhost:${port}/index.html?render&machine=${MACHINE}&w=${W}&h=${H}`);
 await page.waitForFunction(() => window.ready && window.renderFrame, null, { timeout: 120000 });
 await page.evaluate(() => window.ready);
 

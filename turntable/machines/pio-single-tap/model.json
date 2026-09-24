@@ -1,0 +1,41 @@
+{
+ "title": "PIO BINDAS single-tap soda machine",
+ "body": {
+  "w": 635,
+  "h": 818,
+  "d": 558
+ },
+ "head": {
+  "w": 637,
+  "y0": 594.3,
+  "depth": 48
+ },
+ "panel": {
+  "y0": 102.2,
+  "y1": 594.3
+ },
+ "tray": {
+  "w": 658,
+  "h": 87.3,
+  "depth": 180
+ },
+ "valves": [
+  {
+   "x": -1.1,
+   "w": 106.5,
+   "y0": 496.3,
+   "y1": 585.8,
+   "depth": 25,
+   "nozzle": false,
+   "tex": "valve_0"
+  }
+ ],
+ "taps": [
+  {
+   "x": -3.2,
+   "top": 524.0,
+   "bottom": 381.3
+  }
+ ],
+ "rear": "rear"
+}

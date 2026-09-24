@@ -26,20 +26,23 @@ const RENDER_MODE = params.has('render');
 const WIDTH = +(params.get('w') || 1920);
 const HEIGHT = +(params.get('h') || 1080);
 const DURATION = 12; // seconds for one full 360° turn
+const MACHINE = params.get('machine') || 'pio-10-valve';
+const MDIR = `./machines/${MACHINE}`;
+const M = await (await fetch(`${MDIR}/model.json`)).json(); // written by build_machine.py
 
 const mm = (v) => v / 1000; // model is built in millimetres, scene is in metres
 
-// Machine dimensions (mm). Front view: 1 px of reference/front.png ~= 1 mm.
-const BODY_W = 906, BODY_H = 818, BODY_D = 604;
-const HEAD_W = 920, HEAD_Y0 = 598, HEAD_DEPTH = 48;
-const PANEL_Y0 = 118, PANEL_Y1 = 598;
-const TRAY_W = 986, TRAY_H = 93, TRAY_DEPTH = 180;
+// Machine dimensions (mm), measured from the reference photos by build_machine.py.
+const { w: BODY_W, h: BODY_H, d: BODY_D } = M.body;
+const { w: HEAD_W, y0: HEAD_Y0, depth: HEAD_DEPTH } = M.head;
+const { y0: PANEL_Y0, y1: PANEL_Y1 } = M.panel;
+const { w: TRAY_W, h: TRAY_H, depth: TRAY_DEPTH } = M.tray;
 const FEET = 12;
 const FRONT_Z = BODY_D / 2;
-const PHOTO_CX = 510; // x of the machine centre line in front.png
-const PHOTO_FLOOR = 918; // y of the floor line in front.png
-const VALVE_X = [146, 218, 289, 361, 433, 517, 589, 660, 732, 806];
-const PLATFORM_R = 0.78, PLATFORM_H = 0.058, BASE_H = 0.012;
+// Footprint radius around the platform centre; the platform and camera scale with it.
+const FOOT_R = Math.hypot(Math.max(BODY_W, TRAY_W, HEAD_W) / 2, (BODY_D + TRAY_DEPTH) / 2) / 1000;
+const PLATFORM_R = Math.max(0.78, FOOT_R + 0.07), PLATFORM_H = 0.058, BASE_H = 0.012;
+const FRAME = Math.max(1, FOOT_R / 0.69, BODY_H / 818); // 1 = the original 10-valve framing
 
 // ---------------------------------------------------------------------------
 // Renderer / scene / camera
@@ -61,8 +64,8 @@ scene.fog = new THREE.Fog(FOG, 6, 14);
 scene.background = gradientBackground();
 
 const camera = new THREE.PerspectiveCamera(26, WIDTH / HEIGHT, 0.1, 50);
-camera.position.set(0, 1.02, 3.35);
-camera.lookAt(0, 0.44, 0);
+camera.position.set(0, 1.02 * FRAME, 3.35 * FRAME);
+camera.lookAt(0, 0.44 * FRAME, 0);
 
 
 // ---------------------------------------------------------------------------
@@ -220,8 +223,8 @@ const key = new THREE.DirectionalLight('#fff6ec', 2.4);
 key.position.set(-2.2, 4.2, 3.0);
 key.castShadow = true;
 key.shadow.mapSize.set(4096, 4096);
-key.shadow.camera.left = -1.4; key.shadow.camera.right = 1.4;
-key.shadow.camera.top = 1.4; key.shadow.camera.bottom = -1.4;
+key.shadow.camera.left = -1.4 * FRAME; key.shadow.camera.right = 1.4 * FRAME;
+key.shadow.camera.top = 1.4 * FRAME; key.shadow.camera.bottom = -1.4 * FRAME;
 key.shadow.camera.near = 1; key.shadow.camera.far = 10;
 key.shadow.bias = -0.0003; key.shadow.normalBias = 0.01; key.shadow.radius = 6;
 scene.add(key);
@@ -277,7 +280,7 @@ const pending = [];
 function photo(name) {
   let done;
   pending.push(new Promise((res) => { done = res; }));
-  const t = loader.load(`./textures/${name}.png`, done, undefined, done);
+  const t = loader.load(`${MDIR}/tex/${name}.png`, done, undefined, done);
   t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = maxAniso;
   return t;
 }
@@ -315,11 +318,15 @@ boxAt(BODY_W, BODY_H, BODY_D, 0, lift + BODY_H / 2, 0, steelBody);
 // Side panels (photos): +x = right side when facing the front, -x = left side.
 plane(BODY_D, BODY_H, photoMat('side_right'), BODY_W / 2 + 0.6, lift + BODY_H / 2, 0, Math.PI / 2);
 plane(BODY_D, BODY_H, photoMat('side_left'), -BODY_W / 2 - 0.6, lift + BODY_H / 2, 0, -Math.PI / 2);
-// Rear panel
-plane(BODY_W, BODY_H, new THREE.MeshStandardMaterial({ map: rearTex(), metalness: 1, roughness: 0.36, envMapIntensity: 2.2 }),
-  0, lift + BODY_H / 2, -BODY_D / 2 - 0.6, Math.PI);
-plane(BODY_W - 140, 150, new THREE.MeshStandardMaterial({ map: canvasTex((BODY_W - 140) * 2, 300, (g, W, H) => grille(g, 0, 0, W, H, 2)),
-  transparent: true, roughness: 0.5, metalness: 0 }), 0, lift + BODY_H - 70 - 75, -BODY_D / 2 - 1.4, Math.PI);
+// Rear panel: the supplied rear view when there is one, otherwise modelled from the top/rear view.
+if (M.rear) {
+  plane(BODY_W, BODY_H, photoMat(M.rear), 0, lift + BODY_H / 2, -BODY_D / 2 - 0.6, Math.PI);
+} else {
+  plane(BODY_W, BODY_H, new THREE.MeshStandardMaterial({ map: rearTex(), metalness: 1, roughness: 0.36, envMapIntensity: 2.2 }),
+    0, lift + BODY_H / 2, -BODY_D / 2 - 0.6, Math.PI);
+  plane(BODY_W - 140, 150, new THREE.MeshStandardMaterial({ map: canvasTex((BODY_W - 140) * 2, 300, (g, W, H) => grille(g, 0, 0, W, H, 2)),
+    transparent: true, roughness: 0.5, metalness: 0 }), 0, lift + BODY_H - 70 - 75, -BODY_D / 2 - 1.4, Math.PI);
+}
 // Front tap/advert panel (photo)
 plane(BODY_W, PANEL_Y1 - PANEL_Y0, photoMat('front_panel'), 0, lift + (PANEL_Y0 + PANEL_Y1) / 2, FRONT_Z + 0.6);
 
@@ -342,40 +349,40 @@ for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
   f.position.set(mm(sx * (BODY_W / 2 - 60)), mm(FEET / 2), mm(sz * (BODY_D / 2 - 60))); add(f);
 }
 
-// Ten post-mix dispensing valves: 3D housings with the photographed labels.
-const nozzleGeo = new THREE.CylinderGeometry(mm(11), mm(14), mm(30), 24);
-for (let i = 0; i < VALVE_X.length; i++) {
-  const cx = VALVE_X[i] + 30 - PHOTO_CX;
-  const yTop = PHOTO_FLOOR - 379, yBot = PHOTO_FLOOR - 487;
-  const vd = 64;
-  boxAt(60, yTop - yBot, vd, cx, lift + (yTop + yBot) / 2, FRONT_Z + vd / 2, blackPlastic);
-  plane(60, yTop - yBot, photoMat(`valve_${i}`), cx, lift + (yTop + yBot) / 2, FRONT_Z + vd + 0.6);
-  // nozzle
-  const n = new THREE.Mesh(nozzleGeo, blackPlastic);
-  n.position.set(mm(cx), mm(lift + yBot - 15), mm(FRONT_Z + 30)); add(n);
+// Post-mix dispensing valves (and any other front-mounted boxes such as a
+// digital display): 3D housings carrying the photographed label.
+M.valves.forEach((v) => {
+  const vh = v.y1 - v.y0, cy = lift + (v.y0 + v.y1) / 2;
+  boxAt(v.w, vh, v.depth, v.x, cy, FRONT_Z + v.depth / 2, blackPlastic);
+  plane(v.w, vh, photoMat(v.tex), v.x, cy, FRONT_Z + v.depth + 0.6);
+  if (!v.nozzle) return;
+  const k = v.w / 60; // parts are sized for the original 60 mm-wide valve
+  const n = new THREE.Mesh(new THREE.CylinderGeometry(mm(11 * k), mm(14 * k), mm(30 * k), 24), blackPlastic);
+  n.position.set(mm(v.x), mm(lift + v.y0 - 15 * k), mm(FRONT_Z + 30 * k)); add(n);
   // push lever hanging below the valve
-  const lx = cx + 11, ly0 = PHOTO_FLOOR - 599, ly1 = yBot - 4;
-  boxAt(7, ly1 - ly0, 7, lx, lift + (ly0 + ly1) / 2, FRONT_Z + 50, blackPlastic);
-  boxAt(7, 7, 18, lx, lift + ly0 + 3, FRONT_Z + 44, blackPlastic);
-  boxAt(6, 30, 6, cx, lift + yBot - 2, FRONT_Z + 50, blackPlastic).rotation.x = 0.35;
-}
+  const lx = v.x + 11 * k, ly0 = v.y0 - vh, ly1 = v.y0 - 4;
+  boxAt(7 * k, ly1 - ly0, 7 * k, lx, lift + (ly0 + ly1) / 2, FRONT_Z + 50 * k, blackPlastic);
+  boxAt(7 * k, 7 * k, 18 * k, lx, lift + ly0 + 3 * k, FRONT_Z + 44 * k, blackPlastic);
+  boxAt(6 * k, 30 * k, 6 * k, v.x, lift + v.y0 - 2, FRONT_Z + 50 * k, blackPlastic).rotation.x = 0.35;
+});
 
-// Two chrome soda-water taps with black lever handles.
-function tap(photoX) {
+// Chrome soda-water taps with black lever handles. Modelled at the original
+// 204 mm tap height and scaled to the measured top/bottom of each tap.
+function tap({ x, top, bottom }) {
   const g = new THREE.Group();
-  const x = photoX - PHOTO_CX;
   const cyl = (r0, r1, h, mat, seg = 32) => new THREE.Mesh(new THREE.CylinderGeometry(mm(r0), mm(r1), mm(h), seg), mat);
-  const shank = cyl(12, 12, 60, chrome); shank.rotation.x = Math.PI / 2; shank.position.set(0, mm(470), mm(30)); add(shank, g);
-  const flange = cyl(20, 20, 6, chrome); flange.rotation.x = Math.PI / 2; flange.position.set(0, mm(470), mm(3)); add(flange, g);
-  const body = cyl(14, 14, 64, chrome); body.position.set(0, mm(472), mm(62)); add(body, g);
-  const spout = cyl(8, 9.5, 42, chrome); spout.position.set(0, mm(424), mm(64)); add(spout, g);
-  const collar = cyl(10, 12, 12, chrome); collar.position.set(0, mm(510), mm(62)); add(collar, g);
-  const handle = cyl(15, 8, 92, blackPlastic); handle.position.set(0, mm(561), mm(62)); add(handle, g);
+  const shank = cyl(12, 12, 60, chrome); shank.rotation.x = Math.PI / 2; shank.position.set(0, mm(67), mm(30)); add(shank, g);
+  const flange = cyl(20, 20, 6, chrome); flange.rotation.x = Math.PI / 2; flange.position.set(0, mm(67), mm(3)); add(flange, g);
+  const body = cyl(14, 14, 64, chrome); body.position.set(0, mm(69), mm(62)); add(body, g);
+  const spout = cyl(8, 9.5, 42, chrome); spout.position.set(0, mm(21), mm(64)); add(spout, g);
+  const collar = cyl(10, 12, 12, chrome); collar.position.set(0, mm(107), mm(62)); add(collar, g);
+  const handle = cyl(15, 8, 92, blackPlastic); handle.position.set(0, mm(158), mm(62)); add(handle, g);
   const cap = new THREE.Mesh(new THREE.SphereGeometry(mm(15), 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), blackPlastic);
-  cap.position.set(0, mm(607), mm(62)); add(cap, g);
-  g.position.set(mm(x), mm(lift), mm(FRONT_Z)); machine.add(g);
+  cap.position.set(0, mm(204), mm(62)); add(cap, g);
+  g.scale.setScalar((top - bottom) / 204);
+  g.position.set(mm(x), mm(lift + bottom), mm(FRONT_Z)); machine.add(g);
 }
-tap(111); tap(904);
+M.taps.forEach(tap);
 
 // ---------------------------------------------------------------------------
 // Animation

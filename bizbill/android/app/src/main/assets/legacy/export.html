@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'">
+<title>BizBill data export</title></head>
+<body>
+<script>
+// Runs ONLY inside BizBill's hidden legacy-export WebView (file:// origin).
+// Reads data an older BizBill build stored for the file:// origin and hands
+// a copy to the app. It never modifies or deletes anything.
+(async function () {
+  const out = { exportedAt: new Date().toISOString(), localStorage: {}, indexedDB: {} };
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      out.localStorage[k] = localStorage.getItem(k);
+    }
+  } catch (e) { out.localStorageError = String(e); }
+  try {
+    const dbs = indexedDB.databases ? await indexedDB.databases() : [];
+    for (const info of dbs) {
+      if (!info.name) continue;
+      const db = await new Promise((res, rej) => {
+        const r = indexedDB.open(info.name);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+        // Never create or upgrade anything.
+        r.onupgradeneeded = () => { r.transaction.abort(); };
+      });
+      const stores = {};
+      for (const name of Array.from(db.objectStoreNames)) {
+        stores[name] = await new Promise((res) => {
+          const req = db.transaction(name, 'readonly').objectStore(name).getAll();
+          req.onsuccess = () => res(req.result);
+          req.onerror = () => res([]);
+        });
+      }
+      db.close();
+      out.indexedDB[info.name] = stores;
+    }
+  } catch (e) { out.indexedDBError = String(e); }
+  let json;
+  try { json = JSON.stringify(out); } catch (e) { json = JSON.stringify({ exportedAt: out.exportedAt, error: 'unserialisable' }); }
+  LegacyExport.deliver(json);
+})();
+</script>
+</body></html>

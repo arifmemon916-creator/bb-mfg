@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="window_bg">#0F1419</color>
+    <color name="alert_bg">#182028</color>
+</resources>

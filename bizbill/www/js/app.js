@@ -131,7 +131,7 @@ class App {
     this.store.onChange(() => this.updateBell());
     setTimeout(() => runHousekeeping(this.store, 'start').catch((e) => console.warn(e)), 1500);
     // Deep link from a notification tap (Android passes a validated route).
-    window.BizBillBridge.openRoute = (route) => { if (/^#\/[\w/?=&.-]*$/.test(String(route))) this.navigate(route); };
+    window.BizBillBridge.openRoute = (route) => { if (/^#\/[\w/?=&.%-]{0,200}$/.test(String(route))) this.navigate(route); };
     if (this.store.migrationError) {
       toast('Your data could not be upgraded automatically. It has NOT been deleted. Please take a backup (Settings → Backup) and contact support.', 'bad');
     }

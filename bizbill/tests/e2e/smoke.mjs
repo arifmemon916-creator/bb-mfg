@@ -14,7 +14,7 @@ await page.waitForSelector('.appbar');
 const routes = ['dashboard', 'sales', 'purchases', 'quotations', 'doc/new/sale', 'doc/new/purchase', 'doc/new/quotation', 'customers', 'suppliers',
   'party/new/customer', 'products', 'product/new', 'inventory', 'payments', 'payment/new/in', 'receivables', 'payables', 'expenses', 'expense/new',
   'reports', 'report/sales-summary', 'report/fin-pl', 'report/gst-hsn', 'gst', 'pl', 'more', 'search', 'settings', 'settings/company', 'settings/billing',
-  'settings/appearance', 'settings/security', 'settings/notifications', 'backup', 'import', 'audit', 'recycle', 'update', 'about', 'ledger'];
+  'settings/appearance', 'settings/security', 'settings/notifications', 'backup', 'import', 'audit', 'recycle', 'update', 'about', 'ledger', 'notifications', 'dues', 'legacy', 'payment/new/out'];
 for (const r of routes) {
   await page.evaluate((h) => { history.replaceState(null, '', '#/' + h); window.dispatchEvent(new HashChangeEvent('hashchange')); }, r);
   await page.waitForTimeout(250);

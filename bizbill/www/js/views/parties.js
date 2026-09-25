@@ -11,7 +11,7 @@ import { matches } from '../core/search.js';
 import { ledgerStatement, drCr, AGING_BUCKETS } from '../core/ledger.js';
 import { gstinError, mobileError } from '../core/validate.js';
 import { exportParties } from '../core/csv.js';
-import { ledgerSpec, shareMenu, runDocAction } from '../docs/actions.js';
+import { ledgerSpec, shareMenu, runDocAction, partyReminderSpec } from '../docs/actions.js';
 import { shareText, saveFile } from '../platform/bridge.js';
 import { today } from '../core/dates.js';
 
@@ -252,6 +252,8 @@ export function partyView({ store, app }, params) {
         act('book', 'Ledger', () => app.navigate(`#/party/${p.id}/ledger`)),
         p.mobile ? act('phone', 'Call', () => { location.href = 'tel:' + p.mobile.replace(/\s/g, ''); }) : null,
         isCust && acc.balance > 0 && (p.whatsapp || p.mobile) ? act('whatsapp', 'Remind', remind) : null,
+        isCust && acc.balance > 0 ? act('calendar', 'Reminder card', () => shareMenu(partyReminderSpec(store, p))) : null,
+        act('wallet', 'Payments', () => app.navigate(`#/payments?party=${p.id}&dir=${isCust ? 'in' : 'out'}`)),
         act('share', 'Share', shareDetails),
         isCust ? act('quote', 'Quotation', () => app.navigate(`#/doc/new/quotation?party=${p.id}`)) : null,
         act('edit', 'Edit', () => app.navigate(`#/party/${p.id}/edit`)),

@@ -170,6 +170,7 @@ export function billingSettings(ctx) {
     allowNegativeStock: h('input', { type: 'checkbox', checked: b.allowNegativeStock }),
     updatePurchasePrice: h('input', { type: 'checkbox', checked: b.updatePurchasePrice }),
     showHsnSummary: h('input', { type: 'checkbox', checked: b.showHsnSummary }),
+    showProductImage: h('input', { type: 'checkbox', checked: !!b.showProductImage }),
     invoiceCopies: textInput('copies', b.invoiceCopies),
   };
   return settingsPage(ctx, 'Billing settings', () => h('div', { class: 'form' },
@@ -178,6 +179,7 @@ export function billingSettings(ctx) {
       field('Default price mode', i.inclusive),
       h('div', { class: 'row' }, field('Default GST %', i.defaultGst), field('GST on charges', i.chargesGst)),
       h('label', { class: 'check' }, i.showHsnSummary, 'Print HSN/GST summary on invoices'),
+      h('label', { class: 'check' }, i.showProductImage, 'Show product image on invoices (small thumbnail beside the item)'),
       h('p', { class: 'note' }, 'GST calculations follow the rates and settings you choose. Please have your configuration validated by your accountant; BizBill does not guarantee legal or tax compliance.')),
     h('div', { class: 'card form' }, h('h2', null, 'Numbering'),
       Object.entries(numLabels).map(([k, l]) => h('div', { class: 'form', style: { borderBottom: '1px solid var(--border)', paddingBottom: '10px' } },
@@ -209,7 +211,7 @@ export function billingSettings(ctx) {
       roundOff: i.roundOff.checked, qtyDecimals: parseInt(i.qtyDecimals.value, 10), defaultPaymentMethod: i.defaultPaymentMethod.value,
       defaultUnit: i.defaultUnit.value, dueDays: due || 0, currencySymbol: i.currencySymbol.value.trim(), currencyName: i.currencyName.value.trim() || 'Rupees',
       currencySubunit: i.currencySubunit.value.trim() || 'Paise', grouping: i.grouping.value, dateFormat: i.dateFormat.value,
-      allowNegativeStock: i.allowNegativeStock.checked, updatePurchasePrice: i.updatePurchasePrice.checked, showHsnSummary: i.showHsnSummary.checked,
+      allowNegativeStock: i.allowNegativeStock.checked, updatePurchasePrice: i.updatePurchasePrice.checked, showHsnSummary: i.showHsnSummary.checked, showProductImage: i.showProductImage.checked,
       invoiceCopies: i.invoiceCopies.value.trim(),
     });
     return errs;
@@ -333,27 +335,67 @@ export function notificationSettings({ store }) {
   const save = (patch) => store.patchSettings('notifications', patch, 'Notification settings updated').then(draw);
   const draw = () => {
     const n = store.settings.notifications;
+    const st = bridge.notificationStatus();
     clear(host);
-    put(host, h('div', { class: 'card' },
-      switchRow('Notifications', 'Local alerts on this device only', n.enabled, async (on) => {
-        if (on) {
-          const r = await bridge.requestNotificationPermission();
-          if (r && r.ok === false) toast('Notification permission was not granted. You can enable it in system settings.', 'bad');
-        }
-        save({ enabled: on });
-      }),
-      n.enabled ? h('div', null,
-        switchRow('Low stock', 'Daily alert when items reach minimum stock', n.lowStock, (on) => save({ lowStock: on })),
-        switchRow('Outstanding payments', 'Customers with dues older than 30 days', n.outstanding, (on) => save({ outstanding: on })),
-        switchRow('Payment due', 'Invoices due in the next 2 days or overdue', n.paymentDue, (on) => save({ paymentDue: on })),
-        switchRow('Backup reminder', 'Remind when no backup was taken recently', n.backupReminder, (on) => save({ backupReminder: on })),
-        n.backupReminder ? h('div', { class: 'switch-row' }, h('div', null, h('div', { class: 't' }, 'Remind after')),
-          selectInput('days', [['1', '1 day'], ['3', '3 days'], ['7', '7 days'], ['15', '15 days'], ['30', '30 days']], String(n.backupReminderDays), { style: { width: 'auto' }, onchange: (e) => save({ backupReminderDays: parseInt(e.target.value, 10) }) })) : null,
-        switchRow('App update available', 'Only when automatic update check is on (Update center)', n.updates, (on) => save({ updates: on }))) : null),
-    h('p', { class: 'note' }, 'Alerts are computed on this device when BizBill is opened. No business data is sent to any server or notification service.'),
-    n.enabled ? h('button', { class: 'btn block', onclick: () => { if (!bridge.notify(99, 'BizBill', 'Notifications are working.')) toast('Could not show a notification. Check permissions.', 'bad'); } }, 'Send test notification') : null);
+    const offsets = new Set(n.reminderOffsets || []);
+    const customIn = h('input', { type: 'text', inputmode: 'numeric', placeholder: 'e.g. 14', style: { width: '80px' }, 'aria-label': 'Custom days before due date' });
+    put(host,
+      n.enabled && !st.enabled ? h('div', { class: 'note warn', style: { marginBottom: '10px' } },
+        'Notifications are disabled. Enable notifications in Android Settings to receive payment and stock alerts. ',
+        h('button', { class: 'btn small', onclick: () => bridge.openNotificationSettings('app') }, 'Open settings')) : null,
+      h('div', { class: 'card' },
+        switchRow('Notifications', 'Alerts are created on this device only', n.enabled, async (on) => {
+          if (on && !st.enabled) {
+            const ok = await confirmPermission();
+            if (!ok) { draw(); return; }
+            const r = await bridge.requestNotificationPermission();
+            if (r && r.ok === false) toast('Permission not granted. You can enable it later in Android Settings.', 'bad');
+          }
+          save({ enabled: on, permissionAsked: true });
+        }),
+        n.enabled ? h('div', null,
+          switchRow('Low Stock Alerts', 'When a product reaches its minimum stock (once per drop)', n.lowStock, (on) => save({ lowStock: on })),
+          switchRow('Payment Due Alerts', 'Reminders before and on the due date', n.paymentDue, (on) => save({ paymentDue: on })),
+          switchRow('Overdue Alerts', 'Once when a payment becomes overdue', n.overdue !== false, (on) => save({ overdue: on })),
+          switchRow('Backup Reminder', 'When no backup was taken recently', n.backupReminder, (on) => save({ backupReminder: on })),
+          switchRow('App Update', 'When a new BizBill version is available', n.updates, (on) => save({ updates: on })),
+          switchRow('Sound', null, n.sound, (on) => save({ sound: on })),
+          switchRow('Vibration', null, n.vibration, (on) => save({ vibration: on }))) : null),
+      n.enabled ? h('div', { class: 'card' },
+        h('h2', null, 'Reminder timing'),
+        h('div', { class: 'switch-row' }, h('div', null, h('div', { class: 't' }, 'Notification time'), h('div', { class: 'd' }, 'Time of day for scheduled reminders')),
+          h('input', { type: 'time', value: n.time || '09:00', style: { width: 'auto' }, 'aria-label': 'Notification time', onchange: (e) => { if (/^\d{2}:\d{2}$/.test(e.target.value)) save({ time: e.target.value }); } })),
+        h('div', { class: 'small muted', style: { margin: '8px 0 4px' } }, 'Default reminders for invoices with a due date (can be changed per invoice)'),
+        h('div', { class: 'chips', style: { flexWrap: 'wrap' } },
+          [...new Set([0, 1, 3, 7, ...offsets])].sort((x, y) => x - y).map((d) => h('button', { class: 'chip' + (offsets.has(d) ? ' active' : ''), onclick: () => {
+            const next = new Set(offsets);
+            if (next.has(d)) next.delete(d); else next.add(d);
+            save({ reminderOffsets: [...next].sort((x, y) => x - y) });
+          } }, d === 0 ? 'On due date' : `${d} day${d > 1 ? 's' : ''} before`))),
+        h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px' } }, h('span', { class: 'small' }, 'Custom:'), customIn, h('span', { class: 'small' }, 'days before'),
+          h('button', { class: 'btn small', onclick: () => {
+            const d = parseInt(customIn.value, 10);
+            if (!(d >= 1 && d <= 60)) { toast('Enter 1 to 60 days', 'bad'); return; }
+            save({ reminderOffsets: [...new Set([...offsets, d])].sort((x, y) => x - y) });
+          } }, 'Add'))) : null,
+      n.enabled ? h('div', { class: 'card' },
+        h('h2', null, 'Full-screen important alerts'),
+        switchRow('Payment due / overdue', 'Show a full-screen alert, also on the lock screen where Android allows', n.fullScreen, (on) => save({ fullScreen: on })),
+        switchRow('Low stock', 'Use full-screen alerts for low stock too (normally a regular notification)', n.fullScreenLowStock, (on) => save({ fullScreenLowStock: on })),
+        (n.fullScreen || n.fullScreenLowStock) && !st.fullScreenAllowed && bridge.isAndroidApp ? h('div', { class: 'note warn' },
+          'Android has not allowed full-screen alerts for BizBill. They will appear as normal high-priority notifications. ',
+          h('button', { class: 'btn small', onclick: () => bridge.openNotificationSettings('fullscreen') }, 'Allow')) : null,
+        h('p', { class: 'small muted' }, 'Full-screen alerts use Android\'s official full-screen notification feature and follow all system restrictions. BizBill never draws over other apps.')) : null,
+      h('p', { class: 'note' }, 'All alerts are calculated on this device from your own data. No business data is sent to any server or notification service.'),
+      n.enabled ? h('button', { class: 'btn block', onclick: () => { if (!bridge.notifyRich({ id: 99, type: 'system', title: 'BizBill', message: 'Notifications are working.', route: '#/notifications', actions: [], sound: n.sound, vibration: n.vibration })) toast('Could not show a notification. Check permissions.', 'bad'); } }, 'Send test notification') : null);
   };
   draw();
   return { title: 'Notifications', back: true, content: host };
 }
 
+function confirmPermission() {
+  return openSheet((api) => h('div', null,
+    h('h2', null, 'Allow notifications?'),
+    h('p', { class: 'small' }, 'BizBill uses notifications to remind you about payments due, overdue customers, low stock and backups. Alerts are created on your phone; nothing is sent anywhere.'),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: () => api.close(false) }, 'Not now'), h('button', { class: 'btn primary', onclick: () => api.close(true) }, 'Continue')))).then((v) => !!v);
+}

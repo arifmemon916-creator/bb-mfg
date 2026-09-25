@@ -7,7 +7,7 @@ import { toast, errorToast, closeTopSheet, confirmDialog } from './ui/components
 import { NAV_TABS } from './core/settings.js';
 import * as bridge from './platform/bridge.js';
 import { showLock, isLocked } from './views/lock.js';
-import { runHousekeeping } from './services/housekeeping.js';
+import { runHousekeeping, watchForAlerts, watchConnectivity } from './services/housekeeping.js';
 
 // Route table: pattern -> lazily imported view module + export name.
 const ROUTES = [
@@ -57,6 +57,9 @@ const ROUTES = [
   ['recycle', () => import('./views/data.js'), 'recycleBin'],
   ['update', () => import('./views/more.js'), 'updateCenter'],
   ['about', () => import('./views/more.js'), 'about'],
+  ['notifications', () => import('./views/notifications.js'), 'notificationCenter'],
+  ['dues', () => import('./views/notifications.js'), 'duesView'],
+  ['legacy', () => import('./views/data.js'), 'legacyImport'],
 ];
 
 const NAV_ICONS = {
@@ -123,7 +126,17 @@ class App {
     const sec = this.store.settings.security;
     if (sec.enabled && sec.lockOnStart) await showLock(this.store);
     await this.render();
+    watchForAlerts(this.store);
+    watchConnectivity(this.store);
+    this.store.onChange(() => this.updateBell());
     setTimeout(() => runHousekeeping(this.store, 'start').catch((e) => console.warn(e)), 1500);
+    // Deep link from a notification tap (Android passes a validated route).
+    window.BizBillBridge.openRoute = (route) => { if (/^#\/[\w/?=&.-]*$/.test(String(route))) this.navigate(route); };
+    if (this.store.migrationError) {
+      toast('Your data could not be upgraded automatically. It has NOT been deleted. Please take a backup (Settings → Backup) and contact support.', 'bad');
+    }
+    const legacy = bridge.legacyDataInfo();
+    if (legacy.found && !legacy.imported) setTimeout(() => this.navigate('#/legacy'), 800);
     this.registerServiceWorker();
   }
 
@@ -255,7 +268,8 @@ class App {
         : h('div', { style: { width: '8px' } }),
       h('h1', null, view.title || 'BizBill'),
       ...(view.actions || []).map((a) => h('button', { class: 'icon-btn', 'aria-label': a.label, title: a.label, onclick: a.onClick }, icon(a.icon))),
-      !view.hideSearch ? h('button', { class: 'icon-btn', 'aria-label': 'Search', onclick: () => this.navigate('#/search') }, icon('search')) : null);
+      !view.hideSearch ? h('button', { class: 'icon-btn', 'aria-label': 'Search', onclick: () => this.navigate('#/search') }, icon('search')) : null,
+      !view.hideSearch ? this.bell() : null);
     const content = h('main', { class: 'content' + (showNav ? '' : ' no-nav') }, view.content);
     const shell = h('div', { class: 'shell' }, bar, content);
     if (showNav) shell.appendChild(this.bottomNav(path));
@@ -266,6 +280,20 @@ class App {
     if (view.footer) shell.appendChild(view.footer);
     document.title = (view.title ? view.title + ' · ' : '') + 'BizBill';
     replaceRoot(this.root, shell);
+  }
+
+  bell() {
+    const n = this.store.unreadCount();
+    this.bellEl = h('button', { class: 'icon-btn bell', 'aria-label': n ? `Notifications, ${n} unread` : 'Notifications', onclick: () => this.navigate('#/notifications') },
+      icon('bell'), n ? h('span', { class: 'bell-badge' }, n > 99 ? '99+' : String(n)) : null);
+    return this.bellEl;
+  }
+
+  updateBell() {
+    if (!this.bellEl || !this.bellEl.isConnected) return;
+    const fresh = this.bell();
+    const old = this.root.querySelector('.bell');
+    if (old) old.replaceWith(fresh);
   }
 
   bottomNav(path) {

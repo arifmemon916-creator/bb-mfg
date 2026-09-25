@@ -2,11 +2,12 @@
 
 import { h, icon, clear, put } from '../ui/dom.js';
 import {
-  toast, errorToast, confirmDialog, openSheet, pickFile, readAsText, switchRow, selectInput, lazyList, emptyState, kv,
+  toast, errorToast, confirmDialog, openSheet, pickFile, readAsText, switchRow, selectInput, lazyList, emptyState, kv, promptDialog,
 } from '../ui/components.js';
 import { fmt } from './common.js';
 import {
   createBackup, backupFileName, validateBackup, restoreBackup, listSnapshots, getSnapshot, deleteSnapshot,
+  encryptBackup, decryptBackup, isEncryptedBackup, backupPasswordError,
 } from '../core/backup.js';
 import { IMPORT_SCHEMAS, parseImport, commitImport, importTemplate, exportParties, exportProducts } from '../core/csv.js';
 import * as bridge from '../platform/bridge.js';
@@ -71,14 +72,34 @@ export function backupView({ store, app }) {
       const backup = await createBackup(store);
       const json = JSON.stringify(backup);
       const name = backupFileName(store.settings.company.name);
-      const choice = await openSheet((api) => h('div', null, h('h2', null, 'Save backup'),
-        h('p', { class: 'small' }, `${backup.counts.sales} invoices · ${backup.counts.purchases} purchases · ${backup.counts.customers} customers · ${backup.counts.products} products · ${(json.length / 1024).toFixed(0)} KB`),
-        h('div', { class: 'picker-list' },
-          h('button', { class: 'item', onclick: () => api.close('save') }, icon('download'), h('div', { class: 'main' }, h('div', { class: 'title' }, 'Save to device / Drive'), h('div', { class: 'subtitle' }, 'Choose a folder or Google Drive'))),
-          h('button', { class: 'item', onclick: () => api.close('share') }, icon('share'), h('div', { class: 'main' }, h('div', { class: 'title' }, 'Share'), h('div', { class: 'subtitle' }, 'Email, WhatsApp, Drive…')))),
-        h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: () => api.close(null) }, 'Cancel'))));
+      let password = '';
+      const choice = await openSheet((api) => {
+        const protect = h('input', { type: 'checkbox', checked: true });
+        const pw1 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'At least 8 characters', 'aria-label': 'Backup password' });
+        const pw2 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Repeat password', 'aria-label': 'Repeat backup password' });
+        const pwBox = h('div', { class: 'form' }, pw1, pw2, h('div', { class: 'small muted' }, 'Keep this password safe. Without it the backup cannot be restored.'));
+        const err = h('div', { class: 'err small' });
+        protect.addEventListener('change', () => pwBox.classList.toggle('hidden', !protect.checked));
+        const go = (target) => {
+          if (protect.checked) {
+            const e = backupPasswordError(pw1.value);
+            if (e) { err.textContent = e; return; }
+            if (pw1.value !== pw2.value) { err.textContent = 'Passwords do not match'; return; }
+            password = pw1.value;
+          }
+          api.close(target);
+        };
+        return h('div', null, h('h2', null, 'Save backup'),
+          h('p', { class: 'small' }, `${backup.counts.sales} invoices · ${backup.counts.purchases} purchases · ${backup.counts.customers} customers · ${backup.counts.products} products · ${(json.length / 1024).toFixed(0)} KB`),
+          h('label', { class: 'check' }, protect, 'Protect with password (AES-256 encryption) — recommended'), pwBox, err,
+          h('div', { class: 'picker-list' },
+            h('button', { class: 'item', onclick: () => go('save') }, icon('download'), h('div', { class: 'main' }, h('div', { class: 'title' }, 'Save to device / Drive'), h('div', { class: 'subtitle' }, 'Choose a folder or Google Drive'))),
+            h('button', { class: 'item', onclick: () => go('share') }, icon('share'), h('div', { class: 'main' }, h('div', { class: 'title' }, 'Share'), h('div', { class: 'subtitle' }, 'Email, WhatsApp, Drive…')))),
+          h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: () => api.close(null) }, 'Cancel')));
+      });
       if (!choice) return;
-      const blob = new Blob([json], { type: 'application/json' });
+      const fileJson = password ? JSON.stringify(await encryptBackup(backup, password)) : json;
+      const blob = new Blob([fileJson], { type: 'application/json' });
       const r = choice === 'save' ? await bridge.saveFile(blob, name) : await bridge.shareFile(blob, name, { subject: 'BizBill backup ' + today(), text: 'BizBill backup file' });
       if (bridge.hasNativeBackups) bridge.writeBackupFile(name, json);
       if (r && (r.ok || r.downloaded || r.saved)) {
@@ -110,6 +131,11 @@ function historyItem(title, iso, size, sub, onRestore, onDelete, onExport) {
 async function restoreFlow(store, app, text) {
   let obj;
   try { obj = JSON.parse(text); } catch { toast('This file is not a valid BizBill backup (not JSON)', 'bad'); return; }
+  if (isEncryptedBackup(obj)) {
+    const pw = await promptDialog({ title: 'Password protected backup', label: 'Backup password', type: 'password', message: `Created ${when(obj.createdAt)}${obj.company ? ' · ' + obj.company : ''}` });
+    if (!pw) return;
+    try { obj = await decryptBackup(obj, pw); } catch (e) { toast(e.message, 'bad'); return; }
+  }
   const v = await validateBackup(obj);
   if (!v.ok) {
     await openSheet((api) => h('div', null, h('h2', null, 'Backup cannot be restored'),
@@ -123,6 +149,7 @@ async function restoreFlow(store, app, text) {
     title: 'Restore this backup?',
     message: `Backup date: ${when(v.info.createdAt)}\nCompany: ${v.info.company || '—'}\nApp version: ${v.info.appVersion || '—'}\n\nALL current data on this device will be replaced by the backup. A safety copy of the current data is saved first (Backup history → "Safety copy before restore").`,
     details: [
+      ...(v.warnings || []),
       `${c.customers} customers, ${c.suppliers} suppliers`, `${c.products} products`,
       `${c.sales} invoices, ${c.purchases} purchases, ${c.quotations} quotations`,
       `${c.payments} payments, ${c.expenses} expenses`, `${c.stockMoves} stock adjustments`,
@@ -131,8 +158,8 @@ async function restoreFlow(store, app, text) {
   });
   if (!ok) return;
   try {
-    await restoreBackup(store, obj);
-    toast('Backup restored successfully', 'good');
+    const res = await restoreBackup(store, obj);
+    toast('Backup restored successfully' + (res.skippedAttachments ? ` (${res.skippedAttachments} damaged attachment(s) skipped)` : ''), 'good');
     app.applyTheme();
     app.navigate('#/dashboard', { replace: true });
   } catch (e) {
@@ -225,4 +252,53 @@ export function recycleBin({ store, app }) {
       quotes.length ? h('div', null, h('div', { class: 'section-title' }, 'Quotations'), h('div', { class: 'list' }, quotes.map((d) => item(d.number, `${d.party.name} · ${f.money(d.totals.grandTotal)}`, () => store.deleteQuotation(d.id, true))))) : null,
       cancelled.length ? h('div', null, h('div', { class: 'section-title' }, 'Cancelled invoices & purchases (kept for records)'), h('div', { class: 'list' }, cancelled.map((d) => item(`${d.kind === 'sale' ? 'Invoice' : 'Purchase'} ${d.number}`, `${d.party.name} · ${f.money(d.totals.grandTotal)} · ${d.cancelReason || ''}`, null, '#/doc/' + d.id)))) : null),
   };
+}
+
+// ------------------------------------------------------------------ legacy data
+
+export async function legacyImport({ store, app }) {
+  const info = bridge.legacyDataInfo();
+  const host = h('div');
+  if (!info.found) {
+    return { title: 'Previous version data', back: true, content: emptyState('info', 'No data from a previous BizBill version was found on this device.') };
+  }
+  const raw = bridge.readLegacyData();
+  let dump = null;
+  try { dump = JSON.parse(raw); } catch { /* reported below */ }
+  const { analyseLegacy, importLegacy } = await import('../core/legacy.js');
+  const a = dump ? analyseLegacy(dump) : null;
+  const checks = {
+    customers: h('input', { type: 'checkbox', checked: !!(a && a.customers.length) }),
+    suppliers: h('input', { type: 'checkbox', checked: !!(a && a.suppliers.length) }),
+    products: h('input', { type: 'checkbox', checked: !!(a && a.products.length) }),
+    invoices: h('input', { type: 'checkbox', checked: false }),
+  };
+  const exportRaw = () => bridge.saveFile(new Blob([raw || ''], { type: 'application/json' }), `BizBill-previous-version-data-${today()}.json`);
+  put(host,
+    h('div', { class: 'note' }, 'BizBill found data saved by a previous version of the app on this phone. It has been copied to a private file and the original is left untouched, so nothing is lost. Review what was found and choose what to bring into this version.'),
+    !a ? h('div', { class: 'note bad', style: { marginTop: '10px' } }, 'The previous data could not be read automatically. Export the raw file and contact support; it is kept safely on the device.') : h('div', { class: 'card', style: { marginTop: '10px' } },
+      h('h2', null, 'Found'),
+      h('label', { class: 'check' }, checks.customers, `${a.customers.length} customers`),
+      h('label', { class: 'check' }, checks.suppliers, `${a.suppliers.length} suppliers`),
+      h('label', { class: 'check' }, checks.products, `${a.products.length} products (their current stock becomes opening stock)`),
+      h('label', { class: 'check' }, checks.invoices, `${a.invoices.length} invoices (review after import: totals are recalculated with BizBill's GST engine)`),
+      a.sources.length ? h('details', { class: 'more' }, h('summary', null, 'Details'), h('ul', { class: 'small' }, a.sources.map((x) => h('li', null, `${x.label}: ${x.count} ${x.kind} record(s)`)))) : null,
+      h('p', { class: 'small muted' }, 'Records whose name already exists in this version are skipped, never overwritten.')),
+    h('div', { class: 'btn-row', style: { marginTop: '10px' } },
+      h('button', { class: 'btn', onclick: exportRaw }, icon('download'), 'Export raw data'),
+      h('button', { class: 'btn', onclick: () => { bridge.markLegacyImported(); app.navigate('#/dashboard', { replace: true }); } }, 'Not now'),
+      a ? h('button', { class: 'btn primary', onclick: async () => {
+        const ok = await confirmDialog({ title: 'Import previous data?', message: 'A safety backup of the current data is taken first.', confirmText: 'Import' });
+        if (!ok) return;
+        try {
+          const { saveSnapshot } = await import('../core/backup.js');
+          await saveSnapshot(store, 'before-legacy-import', 3);
+          const r = await importLegacy(store, a, { customers: checks.customers.checked, suppliers: checks.suppliers.checked, products: checks.products.checked, invoices: checks.invoices.checked });
+          bridge.markLegacyImported();
+          toast(`Imported ${r.customers} customers, ${r.suppliers} suppliers, ${r.products} products, ${r.invoices} invoices${r.problems.length ? ` · ${r.problems.length} problem(s)` : ''}`, r.problems.length ? '' : 'good');
+          if (r.problems.length) console.warn(r.problems);
+          app.navigate('#/dashboard', { replace: true });
+        } catch (e) { errorToast(e); }
+      } }, 'Import selected') : null));
+  return { title: 'Previous version data', back: true, content: host };
 }

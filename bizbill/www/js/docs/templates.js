@@ -138,8 +138,10 @@ export function renderInvoice(L, doc, settings, extra = {}) {
 
   // Items table.
   const inter = doc.interState;
+  const showImg = !!(b.showProductImage && extra.thumbs && doc.items.some((it) => extra.thumbs[it.productId]));
   const cols = [
     { label: '#', w: 6, align: 'center' },
+    ...(showImg ? [{ label: '', w: 11 }] : []),
     { label: 'Item', w: 0 },
     { label: 'HSN/SAC', w: 15 },
     { label: 'Qty', w: 14, align: 'right' },
@@ -154,10 +156,11 @@ export function renderInvoice(L, doc, settings, extra = {}) {
     const c = it.calc;
     const name = [it.name, it.sku && `SKU: ${it.sku}`, it.description].filter(Boolean).join('\n');
     const disc = it.disc ? (it.discType === 'pct' ? bpToPct(it.disc) + '%' : m(c.discount)) : '';
-    const row = [String(i + 1), name, it.hsn || '', q(it.qty), it.unit || '', m(it.rate), disc, m(c.taxable)];
+    const row = [String(i + 1), ...(showImg ? [''] : []), name, it.hsn || '', q(it.qty), it.unit || '', m(it.rate), disc, m(c.taxable)];
     if (doc.gst) row.push(bpToPct(c.gstBp) + '%', m(c.tax));
     row.push(m(c.total));
-    return row;
+    const t = showImg && extra.thumbs[it.productId];
+    return t ? { cells: row, image: { col: 1, data: t, size: 9 } } : row;
   });
   L.table(cols, rows, { size: 7.5 });
   L.y += 3;
@@ -391,3 +394,50 @@ export function renderReport(L, title, rangeLabel, report, settings) {
   return L.finalize();
 }
 
+
+// -------------------------------------------------------------- reminder card
+
+/**
+ * Shareable payment reminder card. Every value comes from live data:
+ * {amount (outstanding), dueDate, partyName, invoiceNo, overdueDays}
+ */
+export function renderReminderCard(L, r, settings) {
+  const { M, d } = fmt(settings);
+  const c = settings.company;
+  const W = L.W;
+  const overdue = r.overdueDays > 0;
+  const band = overdue ? '#b3261e' : ACCENT;
+  L.rect(0, 0, W, 34, { fill: band });
+  L.text(overdue ? 'PAYMENT OVERDUE' : 'PAYMENT REMINDER', W / 2, 13, { size: 11, style: 'bold', color: '#ffffff', align: 'center' });
+  L.text('Payment Reminder For', W / 2, 21, { size: 8, color: '#dce6f2', align: 'center' });
+  L.text(M(r.amount), W / 2, 30, { size: 20, style: 'bold', color: '#ffffff', align: 'center' });
+  let y = 46;
+  const row = (k, v) => {
+    if (!v) return;
+    L.text(k, 10, y, { size: 8, color: MUTED });
+    L.text(v, W - 10, y, { size: 9.5, style: 'bold', align: 'right' });
+    y += 4;
+    L.line(10, y, W - 10, y, 0.15, '#dddddd');
+    y += 6;
+  };
+  row('Due Date', r.dueDate ? d(r.dueDate) + (overdue ? `  (${r.overdueDays} days overdue)` : '') : '');
+  row('Customer / Party', r.partyName);
+  row('Invoice', r.invoiceNo);
+  if (r.total && r.total !== r.amount) row('Invoice amount', M(r.total));
+  if (c.upiId) row('Pay via UPI', c.upiId);
+  y += 2;
+  const footTop = Math.max(y, L.H - 30);
+  L.rect(0, footTop, W, L.H - footTop, { fill: '#f1f4f8' });
+  let x = 10;
+  if (c.logo) {
+    let w = 16; let hgt = 16;
+    if (c.logoW && c.logoH) { const k = Math.min(16 / c.logoW, 16 / c.logoH); w = c.logoW * k; hgt = c.logoH * k; }
+    L.image(c.logo, x, footTop + 6, w, hgt);
+    x += w + 4;
+  }
+  L.text('Sent by', x, footTop + 9, { size: 7, color: MUTED });
+  L.text(c.name || '', x, footTop + 14.5, { size: 10, style: 'bold', color: ACCENT });
+  if (c.mobile) L.text('Mobile: ' + c.mobile, x, footTop + 19.5, { size: 8 });
+  L.y = L.H;
+  return L;
+}

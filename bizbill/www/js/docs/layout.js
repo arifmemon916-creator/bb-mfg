@@ -175,11 +175,16 @@ export class Layout {
       const style = (!Array.isArray(row) && row.style) || 'normal';
       const wrapped = cells.map((c, i) => (columns[i].wrap === false ? [pdfSafe(c)] : this.wrap(c == null ? '' : String(c), widths[i] - 2 * pad, size, style)));
       const nLines = Math.max(1, ...wrapped.map((w) => w.length));
-      const rh = nLines * lh + 2 * pad;
+      const img = !Array.isArray(row) && row.image;
+      const rh = Math.max(nLines * lh + 2 * pad, img ? img.size + 2 * pad : 0);
       if (this.y + rh > this.bottom) { this.newPage(); drawHead(); }
       const fill = (!Array.isArray(row) && row.fill) || (opts.zebra !== false && ri % 2 ? '#f3f6fa' : null);
       if (fill) this.rect(x0, this.y, totalW, rh, { fill });
       let x = x0;
+      if (img) {
+        const ix = x0 + widths.slice(0, img.col).reduce((a, w) => a + w, 0) + pad;
+        this.image(img.data, ix, this.y + pad, img.size, img.size);
+      }
       wrapped.forEach((lines, i) => {
         const c = columns[i];
         lines.forEach((l, li) => {

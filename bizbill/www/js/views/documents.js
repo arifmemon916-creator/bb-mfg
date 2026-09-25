@@ -5,17 +5,17 @@ import { h, icon, clear, debounce, put } from '../ui/dom.js';
 import {
   field, textInput, moneyInput, qtyInput, dateInput, selectInput, textArea, readMoney, readQty, readPct,
   pickerDialog, confirmDialog, promptDialog, chooseDialog, toast, errorToast, lazyList, emptyState, statusBadge,
-  rangeChips, kv, openSheet,
+  rangeChips, kv, openSheet, productThumb,
 } from '../ui/components.js';
 import { fmt, remember, rangeState, rangeOf, rangeLabel } from './common.js';
-import { DOC_KINDS, PAYMENT_METHODS, UNITS } from '../core/settings.js';
+import { DOC_KINDS, PAYMENT_METHODS, UNITS, REMINDER_OFFSETS } from '../core/settings.js';
 import { GST_RATES } from '../core/validate.js';
 import { STATES, stateName } from '../core/states.js';
 import { pctToBp, bpToPct, mulDivRound, paiseToInput, sum } from '../core/money.js';
 import { today, addDays, inRange } from '../core/dates.js';
 import { matches } from '../core/search.js';
 import { toCSV } from '../core/csv.js';
-import { invoiceSpec, shareMenu, runDocAction, previewPdf } from '../docs/actions.js';
+import { invoiceSpec, shareMenu, runDocAction, previewPdf, reminderCardSpec } from '../docs/actions.js';
 import { saveFile } from '../platform/bridge.js';
 
 const LIST_META = {
@@ -254,6 +254,31 @@ export function docForm({ store, app }, params, query) {
   const dueIn = dateInput('dueDate', draft.dueDate || '');
   const refIn = textInput('refNo', draft.refNo || '', { placeholder: 'Supplier invoice no.' });
   const validIn = dateInput('validUntil', draft.validUntil || '');
+  // Payment reminders (per document; default from notification settings).
+  let reminders = draft.reminders ? [...draft.reminders.offsets] : null;
+  const remBox = h('div');
+  const paintRem = () => {
+    clear(remBox);
+    if (kind === 'quotation' || !dueIn.value) { put(remBox, h('div', { class: 'small muted' }, kind === 'quotation' ? '' : 'Set a due date to schedule payment reminders.')); return; }
+    const active = new Set(reminders || s.notifications.reminderOffsets || []);
+    const opts = [...new Set([...REMINDER_OFFSETS.map(([d]) => d), ...active])].sort((a, b) => a - b);
+    put(remBox, h('div', { class: 'small', style: { fontWeight: 600, color: 'var(--text-2)' } }, 'Payment reminders' + (reminders ? '' : ' (default)')),
+      h('div', { class: 'chips', style: { flexWrap: 'wrap' } }, opts.map((d) => h('button', { type: 'button', class: 'chip' + (active.has(d) ? ' active' : ''), onclick: () => {
+        const next = new Set(active);
+        if (next.has(d)) next.delete(d); else next.add(d);
+        reminders = [...next].sort((a, b) => a - b);
+        markDirty(); paintRem();
+      } }, d === 0 ? 'On due date' : `${d} day${d > 1 ? 's' : ''} before`)),
+      h('button', { type: 'button', class: 'chip', onclick: async () => {
+        const v = await promptDialog({ title: 'Custom reminder', label: 'Days before due date (1–60)', type: 'number' });
+        const d = parseInt(v, 10);
+        if (!(d >= 1 && d <= 60)) return;
+        reminders = [...new Set([...active, d])].sort((a, b) => a - b);
+        markDirty(); paintRem();
+      } }, '+ Custom')),
+      !s.notifications.enabled ? h('div', { class: 'small muted' }, 'Turn on notifications in Settings to receive reminders.') : null);
+  };
+  dueIn.addEventListener('change', paintRem);
 
   // ---- items
   const itemsHost = h('div', { class: 'stack' });
@@ -326,6 +351,7 @@ export function docForm({ store, app }, params, query) {
       createLabel: 'Custom item / new product',
       onCreate: async (name) => ({ custom: true, name }),
       placeholder: 'Search name, SKU or scan barcode…',
+      thumb: (p) => productThumb(p),
     });
     if (!picked) return;
     if (picked.custom) {
@@ -424,7 +450,8 @@ export function docForm({ store, app }, params, query) {
       kind,
       number: numberInput.value.trim(),
       date: dateIn.value,
-      dueDate: kind === 'sale' ? dueIn.value : '',
+      dueDate: kind !== 'quotation' ? dueIn.value : '',
+      reminders: reminders ? { offsets: reminders } : null,
       refNo: kind === 'purchase' ? refIn.value.trim() : '',
       validUntil: kind === 'quotation' ? validIn.value : '',
       party: partySnap,
@@ -533,6 +560,8 @@ export function docForm({ store, app }, params, query) {
       h('div', { class: 'row' }, field(meta.newLabel + ' No.', numberInput, { required: true }), field('Date', dateIn, { required: true })),
       kind === 'sale' ? h('div', { class: 'row' }, field('Due date', dueIn), field('Place of supply', posSelect)) : null,
       kind === 'purchase' ? h('div', { class: 'row' }, field('Supplier bill no.', refIn), field('Place of supply', posSelect)) : null,
+      kind === 'purchase' ? field('Payment due date', dueIn) : null,
+      kind !== 'quotation' ? remBox : null,
       kind === 'quotation' ? h('div', { class: 'row' }, field('Valid until', validIn), field('Place of supply', posSelect)) : null),
     h('div', { class: 'card' },
       h('div', { style: { display: 'flex', alignItems: 'center', marginBottom: '8px' } }, h('h2', { style: { flex: 1, margin: 0 } }, 'Items'),
@@ -572,6 +601,7 @@ export function docForm({ store, app }, params, query) {
     h('button', { class: 'btn primary', type: 'button', onclick: () => save() }, icon('check'), 'Save'));
 
   recalc();
+  paintRem();
   if (!draft.items.length) setTimeout(() => { if (!existing && !lines.length && store.products.size) addProduct(); }, 250);
 
   return {
@@ -655,6 +685,7 @@ export function docView({ store, app }, params) {
   if (d.kind !== 'quotation' && d.status !== 'cancelled' && due > 0 && d.partyId) {
     actions.push(act('wallet', d.kind === 'sale' ? 'Receive' : 'Pay', () => app.navigate(`#/payment/new/${d.kind === 'sale' ? 'in' : 'out'}?party=${d.partyId}&doc=${d.id}`), 'primary'));
   }
+  if (d.kind === 'sale' && d.status !== 'cancelled' && due > 0) actions.push(act('calendar', 'Reminder card', () => shareMenu(reminderCardSpec(store, store.documents.get(d.id)))));
   if (d.status !== 'cancelled' && d.qStatus !== 'converted') actions.push(act('edit', 'Edit', () => app.navigate(`#/doc/${d.id}/edit`)));
   actions.push(act('copy', 'Duplicate', () => app.navigate(`#/doc/new/${d.kind}?copy=${d.id}`)));
   if (d.kind === 'quotation') {

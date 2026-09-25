@@ -217,3 +217,82 @@ export function deleteBackupFile(name) {
   try { return native.deleteBackupFile(name) === 'true'; } catch { return false; }
 }
 
+
+// ---- Rich notifications, schedules and permission status (Android) ----
+
+/**
+ * Post a notification with actions. payload: {id, type, title, message,
+ * route, actions:[{label, route}], fullScreen, amount}
+ * Routes are validated again natively against an allowlist.
+ */
+export function notifyRich(payload) {
+  if (native && native.notifyRich) {
+    try { return native.notifyRich(JSON.stringify(payload)) === 'true'; } catch { return false; }
+  }
+  return notify(payload.id || 0, payload.title, payload.message);
+}
+
+/** Replace all scheduled reminder alarms. items: [{key, at(ms), type, title, message, route, actions, fullScreen}] */
+export function setReminderSchedule(items) {
+  if (native && native.setReminderSchedule) {
+    try { native.setReminderSchedule(JSON.stringify(items.slice(0, 200))); return true; } catch { return false; }
+  }
+  return false;
+}
+
+/** {enabled: bool, fullScreenAllowed: bool, canAsk: bool} */
+export function notificationStatus() {
+  if (native && native.getNotificationStatus) {
+    try { return JSON.parse(native.getNotificationStatus()); } catch { /* fall through */ }
+  }
+  const perm = typeof Notification !== 'undefined' ? Notification.permission : 'denied';
+  return { enabled: perm === 'granted', fullScreenAllowed: false, canAsk: perm === 'default' };
+}
+
+export function openNotificationSettings(kind = 'app') {
+  if (native && native.openNotificationSettings) try { native.openNotificationSettings(kind); } catch { /* ignore */ }
+}
+
+// ---- Secure in-app update (Android): all verification happens natively ----
+
+export const hasNativeUpdater = !!(native && native.checkUpdate);
+
+/** Resolves {ok, available, mandatory, latestVersionName, latestVersionCode, currentVersionName, currentVersionCode, releaseNotes, error} */
+export function nativeCheckUpdate(url) {
+  return nativeAsync('checkUpdate', url);
+}
+
+/** Downloads, verifies (host, size, SHA-256, package, versionCode, signature) and launches the system installer. */
+export function nativeDownloadAndInstall(onProgress) {
+  if (typeof window !== 'undefined') window.BizBillBridge.onUpdateProgress = (pct) => { try { onProgress && onProgress(pct); } catch { /* ignore */ } };
+  return nativeAsync('downloadAndInstallUpdate');
+}
+
+// ---- Data left by an older (file://) BizBill build ----
+
+export function legacyDataInfo() {
+  if (native && native.getLegacyDataInfo) {
+    try { return JSON.parse(native.getLegacyDataInfo()); } catch { /* ignore */ }
+  }
+  return { found: false };
+}
+
+export function readLegacyData() {
+  if (native && native.readLegacyData) {
+    try { return native.readLegacyData(); } catch { return null; }
+  }
+  return null;
+}
+
+export function markLegacyImported() {
+  if (native && native.markLegacyImported) try { native.markLegacyImported(); } catch { /* ignore */ }
+}
+
+/** Open an attachment (photo / PDF) in a viewer app through FileProvider. */
+export async function openAttachment(blob, name) {
+  if (native && native.shareFile) return shareFile(blob, name, { target: 'view' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank', 'noopener');
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
+  return { ok: true };
+}

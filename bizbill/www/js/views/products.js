@@ -4,7 +4,7 @@
 import { h, icon, clear, debounce, put } from '../ui/dom.js';
 import {
   field, textInput, moneyInput, qtyInput, selectInput, textArea, readMoney, readQty, toast, errorToast,
-  lazyList, emptyState, confirmDialog, openSheet, dateInput, kv,
+  lazyList, emptyState, confirmDialog, openSheet, dateInput, kv, pickImage, processImageFile, productThumb,
 } from '../ui/components.js';
 import { fmt, remember, sectionTitle } from './common.js';
 import { UNITS } from '../core/settings.js';
@@ -58,6 +58,7 @@ function productItem(store, f, p) {
   const st = store.stockOf(p.id);
   const low = store.isLowStock(p);
   return h('a', { class: 'item', href: '#/product/' + p.id },
+    productThumb(p),
     h('div', { class: 'main' },
       h('div', { class: 'title' }, p.name),
       h('div', { class: 'subtitle' }, [p.sku || p.code, p.category, p.hsn && 'HSN ' + p.hsn].filter(Boolean).join(' · ') || '—')),
@@ -131,6 +132,7 @@ export function productForm({ store, app }, params) {
     gst: selectInput('gst', gstOpts, String(p.gstBp)),
     saleInclusive: h('input', { type: 'checkbox', checked: !!p.saleInclusive }),
     trackStock: h('input', { type: 'checkbox', checked: p.trackStock !== false }),
+    lowStockAlert: h('input', { type: 'checkbox', checked: p.lowStockAlert !== false }),
     openingStock: qtyInput('openingStock', p.openingStock),
     minStock: qtyInput('minStock', p.minStock),
     description: textArea('description', p.description, { rows: 2 }),
@@ -170,9 +172,11 @@ export function productForm({ store, app }, params) {
         hsn: inputs.hsn.value, category: inputs.category.value, brand: inputs.brand.value, unit: inputs.unit.value,
         purchasePrice: vals.purchasePrice.value, salePrice: vals.salePrice.value, mrp: vals.mrp.value,
         gstBp: parseInt(inputs.gst.value, 10) || 0, saleInclusive: inputs.saleInclusive.checked,
-        trackStock: inputs.trackStock.checked, openingStock: vals.openingStock.value, minStock: vals.minStock.value,
+        trackStock: inputs.trackStock.checked, lowStockAlert: inputs.lowStockAlert.checked, openingStock: vals.openingStock.value, minStock: vals.minStock.value,
         description: inputs.description.value.trim(),
       });
+      if (pendingImage) await store.setProductImage(saved.id, pendingImage);
+      else if (removeImage && existing && existing.imageId) await store.removeProductImage(saved.id);
       dirty = false;
       toast('Product saved', 'good');
       app.navigate('#/product/' + saved.id, { replace: true });
@@ -180,6 +184,23 @@ export function productForm({ store, app }, params) {
   };
 
   const scan = scanButton((code) => { inputs.barcode.value = code; dirty = true; });
+  // Product image: applied when the product is saved.
+  let pendingImage = null;
+  let removeImage = false;
+  const imgBox = h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center' } });
+  const paintImg = () => {
+    clear(imgBox);
+    const shown = pendingImage ? { thumb: pendingImage.thumb } : removeImage ? null : p;
+    put(imgBox, productThumb(shown, 'lg'), h('div', { class: 'stack' },
+      h('button', { class: 'btn small', type: 'button', onclick: async () => {
+        const file = await pickImage(shown && shown.thumb ? 'Change product image' : 'Add product image');
+        if (!file) return;
+        try { pendingImage = await processImageFile(file); removeImage = false; dirty = true; paintImg(); } catch (e) { errorToast(e); }
+      } }, icon('image'), shown && shown.thumb ? 'Change image' : 'Add product image'),
+      shown && shown.thumb ? h('button', { class: 'btn small danger', type: 'button', onclick: () => { pendingImage = null; removeImage = true; dirty = true; paintImg(); } }, 'Remove image') : null,
+      h('div', { class: 'small muted' }, 'JPEG, PNG or WebP · resized to 800 px')));
+  };
+  paintImg();
   return {
     title: existing ? 'Edit product' : 'New product',
     back: true,
@@ -189,6 +210,7 @@ export function productForm({ store, app }, params) {
     content: h('div', { class: 'form' },
       h('datalist', { id: 'bb-categories' }, categories.map((c) => h('option', { value: c }))),
       h('div', { class: 'card form' },
+        imgBox,
         field('Product name', inputs.name, { required: true }),
         h('div', { class: 'row' }, field('Product code', inputs.code), field('SKU', inputs.sku)),
         h('div', { class: 'row' }, field('Barcode', scan ? h('div', { style: { display: 'flex', gap: '4px' } }, inputs.barcode, scan) : inputs.barcode), field('HSN/SAC', inputs.hsn)),
@@ -202,6 +224,7 @@ export function productForm({ store, app }, params) {
       h('div', { class: 'card form' },
         h('h2', null, 'Stock'),
         h('label', { class: 'check' }, inputs.trackStock, 'Track stock for this item (untick for services)'),
+        h('label', { class: 'check' }, inputs.lowStockAlert, 'Low stock alert for this product'),
         h('div', { class: 'row' }, field('Unit', inputs.unit), field('Opening stock', inputs.openingStock)),
         field('Minimum stock (low-stock alert)', inputs.minStock),
         field('Description', inputs.description))),
@@ -239,7 +262,8 @@ export function productView({ store, app }, params) {
       p.deleted ? h('div', { class: 'note bad', style: { marginBottom: '12px' } }, 'This product is in the recycle bin.') : null,
       h('div', { class: 'card' },
         h('div', { class: 'doc-head' },
-          h('div', null, h('h2', null, p.name), h('div', { class: 'small muted' }, [p.code, p.sku && 'SKU ' + p.sku, p.barcode, p.category, p.brand].filter(Boolean).join(' · '))),
+          h('button', { style: { border: 0, background: 'none', padding: 0, cursor: p.imageId ? 'zoom-in' : 'default' }, 'aria-label': 'Preview image', onclick: () => previewImage(store, p) }, productThumb(p, 'lg')),
+          h('div', { style: { flex: 1 } }, h('h2', null, p.name), h('div', { class: 'small muted' }, [p.code, p.sku && 'SKU ' + p.sku, p.barcode, p.category, p.brand].filter(Boolean).join(' · '))),
           p.trackStock ? h('div', { style: { textAlign: 'right' } }, h('div', { class: 'small muted' }, 'In stock'), h('div', { class: 'big ' + (low ? 'neg' : '') }, f.qty(st.current)), h('div', { class: 'small muted' }, p.unit)) : h('span', { class: 'badge info' }, 'Service')),
         low ? h('div', { class: 'note warn', style: { marginTop: '8px' } }, `Low stock: minimum is ${f.qty(p.minStock)} ${p.unit}`) : null),
       h('div', { class: 'actions-grid', style: { marginBottom: '12px' } },
@@ -328,6 +352,7 @@ export function inventory({ store, app }, params, query) {
       const s = store.stockOf(p.id);
       const low = store.isLowStock(p);
       return h('div', { class: 'item' },
+        productThumb(p),
         h('a', { class: 'main', href: '#/product/' + p.id, style: { color: 'inherit', textDecoration: 'none' } },
           h('div', { class: 'title' }, p.name),
           h('div', { class: 'subtitle' }, `Open ${f.qty(s.opening)} · In ${f.qty(s.purchased)} · Out ${f.qty(s.sold)} · Adj ${f.qty(s.adjusted)}`)),
@@ -358,4 +383,13 @@ export function inventory({ store, app }, params, query) {
     actions: [{ icon: 'print', label: 'Stock report', onClick: stockReport }],
     fab: { href: '#/doc/new/purchase', icon: 'purchase', text: 'Purchase', label: 'New purchase' },
   };
+}
+
+async function previewImage(store, p) {
+  if (!p.imageId) return;
+  const att = await store.getAttachment(p.imageId);
+  if (!att) return;
+  openSheet((api) => h('div', null, h('h2', null, p.name),
+    h('img', { src: att.data, alt: p.name, style: { width: '100%', borderRadius: '10px', background: '#fff' } }),
+    h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: () => api.close() }, 'Close'))));
 }

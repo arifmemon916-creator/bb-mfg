@@ -3,6 +3,7 @@
 import { h, icon, clear, append, debounce } from './dom.js';
 import { RANGE_PRESETS, resolveRange, today, isValidISODate } from '../core/dates.js';
 import { paiseToInput, qtyToInput, bpToPct, parseDecimal } from '../core/money.js';
+import { LIMITS, IMAGE_TYPES, sniffType, sha256OfString } from '../core/files.js';
 
 // ------------------------------------------------------------------ toast
 
@@ -28,7 +29,7 @@ const openSheets = [];
 export function closeTopSheet() {
   const s = openSheets[openSheets.length - 1];
   if (!s) return false;
-  s.close(null);
+  if (s.dismissable) s.close(null);
   return true;
 }
 
@@ -47,6 +48,7 @@ export function openSheet(build, { dismissable = true } = {}) {
         resolve(value);
       },
       sheet,
+      dismissable,
     };
     overlay.addEventListener('click', (e) => { if (e.target === overlay && dismissable) api.close(null); });
     append(sheet, [build(api)]);
@@ -110,7 +112,7 @@ export function chooseDialog(title, options) {
 /**
  * Searchable picker. items: array; opts: {title, label(item), sub(item), search(item) -> string, create: {label, fn}}
  */
-export function pickerDialog({ title, items, label, sub, end, search, createLabel, onCreate, placeholder = 'Search…' }) {
+export function pickerDialog({ title, items, label, sub, end, search, createLabel, onCreate, placeholder = 'Search…', thumb }) {
   return openSheet((api) => {
     const list = h('div', { class: 'picker-list' });
     const input = h('input', { type: 'search', placeholder, 'aria-label': 'Search' });
@@ -125,6 +127,7 @@ export function pickerDialog({ title, items, label, sub, end, search, createLabe
       }
       for (const it of filtered) {
         list.appendChild(h('button', { class: 'item', onclick: () => api.close(it) },
+          thumb ? thumb(it) : null,
           h('div', { class: 'main' }, h('div', { class: 'title' }, label(it)), sub ? h('div', { class: 'subtitle' }, sub(it)) : null),
           end ? h('div', { class: 'end small' }, end(it)) : null));
       }
@@ -372,4 +375,61 @@ export function imageToDataUrl(file, maxSide = 1200, quality = 0.8, keepPng = fa
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read the image')); };
     img.src = url;
   });
+}
+
+// ------------------------------------------------------------------ images
+
+/**
+ * Validate and optimise a picked image file.
+ * - checks the real type from the file bytes (JPEG / PNG / WebP only)
+ * - rejects oversized input
+ * - resizes and re-encodes to JPEG (this also strips EXIF/GPS metadata)
+ * Returns {data, thumb, sha256, width, height, mime}
+ */
+export async function processImageFile(file, { maxSide = LIMITS.productImageSide, thumbSide = LIMITS.productThumbSide, quality = 0.82 } = {}) {
+  if (!file) throw new Error('No file selected');
+  if (file.size > LIMITS.imageInputBytes) throw new Error('Image is larger than 15 MB');
+  const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  const type = sniffType(head);
+  if (!IMAGE_TYPES.includes(type)) throw new Error('Please choose a JPEG, PNG or WebP image');
+  const full = await imageToDataUrl(new File([file], 'img', { type }), maxSide, quality);
+  const thumb = thumbSide ? await imageToDataUrl(new File([file], 'img', { type }), thumbSide, 0.7) : null;
+  return { data: full.data, thumb: thumb && thumb.data, width: full.width, height: full.height, mime: full.mime, sha256: await sha256OfString(full.data) };
+}
+
+/** Validate a picked PDF (content check + 5 MB limit). Returns {data, name, mime}. */
+export async function processPdfFile(file) {
+  if (!file) throw new Error('No file selected');
+  if (file.size > LIMITS.pdfBytes) throw new Error('PDF is larger than 5 MB');
+  const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  if (sniffType(head) !== 'application/pdf') throw new Error('This file is not a valid PDF');
+  const data = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).replace(/^data:[^;]*;/, 'data:application/pdf;'));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+  return { data, name: file.name || 'document.pdf', mime: 'application/pdf' };
+}
+
+/** Choose camera / gallery and return a File (or null). */
+export async function pickImage(title = 'Add image') {
+  const src = await chooseDialog(title, [
+    { value: 'camera', label: 'Camera', sub: 'Take a photo', icon: 'image' },
+    { value: 'gallery', label: 'Gallery / Photo picker', sub: 'Choose an existing photo', icon: 'grid' },
+  ]);
+  if (!src) return null;
+  return new Promise((resolve) => {
+    const input = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', style: { display: 'none' } });
+    if (src === 'camera') input.setAttribute('capture', 'environment');
+    input.addEventListener('change', () => { resolve(input.files[0] || null); input.remove(); });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+/** Product thumbnail or a neutral placeholder. */
+export function productThumb(p, cls = '') {
+  if (p && p.thumb && /^data:image\/(jpeg|png|webp);base64,/.test(p.thumb)) return h('img', { class: 'thumb ' + cls, src: p.thumb, alt: '', loading: 'lazy' });
+  return h('div', { class: 'thumb ph ' + cls, 'aria-hidden': 'true' }, icon('tag'));
 }

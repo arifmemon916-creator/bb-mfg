@@ -1,10 +1,11 @@
 // More menu, global search, update center, about / help.
 
 import { h, icon, clear, debounce, put } from '../ui/dom.js';
-import { switchRow, toast, errorToast, field, textInput } from '../ui/components.js';
+import { switchRow, toast, field, textInput, productThumb } from '../ui/components.js';
 import { globalSearch } from '../core/search.js';
-import { checkForUpdate, currentVersion } from '../services/update.js';
-import { openExternal, isAndroidApp, appInfo } from '../platform/bridge.js';
+import { checkForUpdate, currentVersion, currentVersionCode } from '../services/update.js';
+import { showUpdateDialog } from './update-dialog.js';
+import { isAndroidApp } from '../platform/bridge.js';
 import { APP_VERSION } from '../core/backup.js';
 
 const tile = (href, ic, label) => h('a', { href }, icon(ic), label);
@@ -45,7 +46,7 @@ export function search({ store, app }) {
     const list = globalSearch(store, q, 60);
     if (!list.length) { put(results, h('div', { class: 'list' }, h('div', { class: 'empty' }, 'No results'))); return; }
     put(results, h('div', { class: 'list' }, list.map((r) => h('a', { class: 'item', href: r.route },
-      h('div', { class: 'avatar' }, icon(icons[r.type] || 'search')),
+      r.type === 'product' ? productThumb(store.products.get(r.id)) : h('div', { class: 'avatar' }, icon(icons[r.type] || 'search')),
       h('div', { class: 'main' }, h('div', { class: 'title' }, r.title), h('div', { class: 'subtitle' }, r.subtitle)),
       h('span', { class: 'badge info' }, labels[r.type] || r.type)))));
   };
@@ -61,21 +62,20 @@ export function updateCenter({ store }) {
   const status = h('div');
   const draw = () => {
     const u = store.settings.update;
-    const info = appInfo();
     clear(host);
     const urlIn = textInput('url', u.url, { type: 'url' });
     put(host, 
       h('div', { class: 'card' },
         h('div', { class: 'small muted' }, 'Installed version'),
         h('div', { style: { fontSize: '1.4rem', fontWeight: 800 } }, currentVersion()),
-        h('div', { class: 'small muted' }, isAndroidApp ? `Android app · build ${info.versionCode || '—'}` : 'Web version'),
+        h('div', { class: 'small muted' }, `${isAndroidApp ? 'Android app' : 'Web version'} · build ${currentVersionCode()}`),
         h('div', { class: 'small muted' }, 'Last checked: ' + (u.lastCheckedAt ? new Date(u.lastCheckedAt).toLocaleString() : 'never')),
         h('button', { class: 'btn primary block', style: { marginTop: '12px' }, onclick: check }, icon('refresh'), 'Check for updates'),
         status),
       h('div', { class: 'card' },
         switchRow('Check automatically', 'Once a day when the app opens (requires internet)', u.autoCheck, async (on) => { await store.patchSettings('update', { autoCheck: on }, 'Automatic update check ' + (on ? 'enabled' : 'disabled')); draw(); }),
         h('details', { class: 'more', style: { marginTop: '8px' } }, h('summary', null, 'Update source'),
-          h('div', { class: 'form' }, field('Release URL (https)', urlIn, { hint: 'GitHub "latest release" API URL or a JSON file with {version, notes, url}' }),
+          h('div', { class: 'form' }, field('Release URL (https)', urlIn, { hint: 'HTTPS address of update.json published with each release' }),
             h('button', { class: 'btn', onclick: async () => {
               if (!/^https:\/\//.test(urlIn.value.trim())) { toast('URL must start with https://', 'bad'); return; }
               await store.patchSettings('update', { url: urlIn.value.trim() }, 'Update source changed');
@@ -91,19 +91,15 @@ export function updateCenter({ store }) {
       clear(status);
       if (r.available) {
         put(status, h('div', { class: 'note', style: { marginTop: '10px' } },
-          h('b', null, `Version ${r.latest} is available`), r.publishedAt ? h('div', { class: 'small' }, 'Released ' + new Date(r.publishedAt).toLocaleDateString()) : null,
-          r.notes ? h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap', maxHeight: '200px', overflow: 'auto' } }, r.notes) : null,
-          r.downloadUrl ? h('button', { class: 'btn primary', style: { marginTop: '8px' }, onclick: () => openExternal(r.downloadUrl) }, icon('download'), 'Download update') : null,
-          h('p', { class: 'small' }, 'Tip: take a backup before installing an update.')));
+          h('b', null, `Version ${r.latestVersionName} is available${r.mandatory ? ' (security update)' : ''}`),
+          h('div', null, h('button', { class: 'btn primary', style: { marginTop: '8px' }, onclick: () => showUpdateDialog(store, r) }, icon('download'), 'View & update'))));
+        showUpdateDialog(store, r);
       } else {
-        put(status, h('p', { class: 'small pos', style: { marginTop: '10px' } }, `You have the latest version (${r.current}).`));
+        put(status, h('p', { class: 'small pos', style: { marginTop: '10px' } }, `You have the latest version (${r.currentVersionName}).`));
       }
-      draw();
-      host.querySelector('.card').appendChild(status);
     } catch (e) {
       clear(status);
       put(status, h('p', { class: 'small neg', style: { marginTop: '10px' } }, e.message || String(e)));
-      if (!/internet|release/i.test(e.message)) errorToast(e);
     }
   };
   draw();

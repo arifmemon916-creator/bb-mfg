@@ -10,7 +10,8 @@ export const BACKUP_FORMAT = 'bizbill-backup';
 export const ENCRYPTED_FORMAT = 'bizbill-backup-encrypted';
 // 1 = initial; 2 = adds notifications, product images, payment attachments, encryption envelope.
 export const BACKUP_FORMAT_VERSION = 2;
-export const APP_VERSION = '1.0.0';
+export { VERSION_NAME as APP_VERSION } from '../version.js';
+import { VERSION_NAME as APP_VERSION } from '../version.js';
 const STORES = DATA_STORES;
 const COUNT_LABELS = {
   parties: 'Customers & suppliers', products: 'Products', documents: 'Invoices / purchases / quotations',

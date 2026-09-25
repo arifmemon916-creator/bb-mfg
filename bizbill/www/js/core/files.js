@@ -64,6 +64,7 @@ export function isValidAttachment(a) {
 }
 
 export function safeFileName(name, fallback = 'file') {
+  // eslint-disable-next-line no-control-regex
   const s = String(name || '').replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').replace(/^\.+/, '').trim().slice(0, 80);
   return s || fallback;
 }

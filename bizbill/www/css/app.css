@@ -317,3 +317,25 @@ table.data td.wrap { white-space: normal; min-width: 160px; }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 .ico.rot { transform: rotate(180deg); color: var(--muted); width: 18px; height: 18px; }
+.bell { position: relative; }
+.bell-badge { position: absolute; top: 6px; right: 4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: #d93025; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.thumb { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; flex: none; background: var(--surface-2); }
+.thumb.ph { display: grid; place-items: center; color: var(--muted); }
+.thumb.ph .ico { width: 22px; height: 22px; }
+.thumb.lg { width: 120px; height: 120px; border-radius: 12px; }
+.notif.unread .title::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--brand); margin-right: 6px; vertical-align: middle; }
+.notif .subtitle { white-space: pre-line; }
+.pay-hero { border-radius: var(--radius); padding: 16px; color: #fff; margin-bottom: 12px; }
+.pay-hero.in { background: linear-gradient(135deg, #1b7f3b, #2e9e57); }
+.pay-hero.out { background: linear-gradient(135deg, #b3261e, #d9453b); }
+.pay-hero .who { font-size: .95rem; opacity: .95; }
+.pay-hero .amt { display: flex; align-items: center; gap: 6px; font-size: 2.2rem; font-weight: 800; margin-top: 6px; }
+.pay-hero .amt input { background: transparent; border: 0; border-bottom: 2px solid rgba(255,255,255,.6); color: #fff; font-size: 2.2rem; font-weight: 800; min-height: 52px; padding: 0 4px; border-radius: 0; box-shadow: none; }
+.pay-hero .amt input::placeholder { color: rgba(255,255,255,.6); }
+.att-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.att { position: relative; border: 1px solid var(--border); border-radius: 10px; aspect-ratio: 1; overflow: hidden; background: var(--surface-2); display: grid; place-items: center; font-size: .7rem; text-align: center; padding: 4px; cursor: pointer; }
+.att img { width: 100%; height: 100%; object-fit: cover; position: absolute; inset: 0; }
+.att .x { position: absolute; top: 2px; right: 2px; width: 26px; height: 26px; border-radius: 50%; border: 0; background: rgba(0,0,0,.6); color: #fff; z-index: 1; cursor: pointer; }
+.savebar .btn.big { min-height: 52px; flex: 1; font-size: 1.05rem; }
+.savebar.in .btn.primary { background: #1b7f3b; border-color: #1b7f3b; }
+.savebar.out .btn.primary { background: #b3261e; border-color: #b3261e; }

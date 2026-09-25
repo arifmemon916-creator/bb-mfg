@@ -5,6 +5,9 @@ import { rangeChips } from '../ui/components.js';
 import { dashboardMetrics, salesTrend } from '../core/reports.js';
 import { fmt, rangeState, rangeOf, rangeLabel, sectionTitle } from './common.js';
 import { DASHBOARD_CARDS } from '../core/settings.js';
+import { dueSummary } from '../core/alerts.js';
+import { today, resolveRange } from '../core/dates.js';
+import { permissionWarning } from './notifications.js';
 
 export function dashboard({ store, app }) {
   const f = fmt(store);
@@ -33,6 +36,16 @@ export function dashboard({ store, app }) {
       card('products', 'Products', String(m.products), 'Total', 'tag', '#/products'),
       card('lowstock', 'Low Stock', String(m.lowStock), m.lowStock ? 'Needs attention' : 'All good', 'alert', '#/inventory?filter=low', m.lowStock ? 'bad' : ''));
 
+    const t = today();
+    const dues = dueSummary(store, t);
+    const recv = (rows) => rows.filter((r) => r.doc.kind === 'sale');
+    const sumDue = (rows) => rows.reduce((a, r) => a + r.due, 0);
+    const todayM = dashboardMetrics(store, resolveRange('today'));
+    const payCards = h('div', { class: 'kpis', style: { marginTop: '10px' } },
+      card('duetoday', 'Due Today', f.money(sumDue(recv(dues.dueToday))), `${recv(dues.dueToday).length} invoice(s)`, 'calendar', '#/dues?f=today', recv(dues.dueToday).length ? 'bad' : ''),
+      card('overdue', 'Overdue', f.money(sumDue(recv(dues.overdue))), `${recv(dues.overdue).length} invoice(s)`, 'alert', '#/dues?f=overdue', recv(dues.overdue).length ? 'bad' : ''),
+      card('collection', 'Collected Today', f.money(todayM.collection), 'Payment In', 'in', '#/payments?dir=in', 'good'),
+      card('paidtoday', 'Paid Today', f.money(todayM.paid), 'Payment Out', 'out', '#/payments?dir=out'));
     const trend = salesTrend(store, range);
     let trendCard = null;
     if (trend.length > 1 && cardsEnabled.has('sales')) {
@@ -47,15 +60,18 @@ export function dashboard({ store, app }) {
     const recent = store.listDocuments('sale').slice(0, 5);
     const company = store.settings.company;
     replace(body, 
+      permissionWarning(store),
       !company.name ? h('div', { class: 'note warn', style: { marginBottom: '12px' } }, 'Set up your company profile so it appears on invoices. ', h('a', { href: '#/settings/company' }, 'Open Company Profile')) : null,
       h('div', { class: 'quick' },
         h('a', { href: '#/doc/new/sale' }, icon('sales'), 'New Invoice'),
         h('a', { href: '#/doc/new/purchase' }, icon('purchase'), 'Purchase'),
-        h('a', { href: '#/payment/new/in' }, icon('in'), 'Receive'),
-        h('a', { href: '#/expense/new' }, icon('expense'), 'Expense')),
+        h('a', { href: '#/payment/new/in' }, icon('in'), 'Payment In'),
+        h('a', { href: '#/payment/new/out' }, icon('out'), 'Payment Out')),
       sectionTitle('Overview · ' + rangeLabel(store, state), h('a', { href: '#/settings/appearance' }, 'Customize')),
       chips,
       kpis,
+      sectionTitle('Payments', h('a', { href: '#/dues' }, 'Dues')),
+      payCards,
       trendCard,
       sectionTitle('Recent invoices', h('a', { href: '#/sales' }, 'View all')),
       recent.length

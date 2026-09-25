@@ -17,8 +17,6 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 
 /**
  * Data migration from older BizBill builds that loaded the app from
@@ -64,7 +62,7 @@ final class LegacyDataExporter {
         File f = dataFile(c);
         if (!f.exists() || f.length() > InputGuard.MAX_BACKUP_CHARS) return null;
         try {
-            return new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+            return FileStore.readText(f, InputGuard.MAX_BACKUP_CHARS);
         } catch (IOException e) {
             return null;
         }

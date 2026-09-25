@@ -21,8 +21,6 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -444,7 +442,7 @@ final class NativeBridge {
         File f = new File(FileStore.backupsDir(activity), name);
         if (!f.isFile() || f.length() > InputGuard.MAX_BACKUP_CHARS) return null;
         try {
-            return new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+            return FileStore.readText(f, InputGuard.MAX_BACKUP_CHARS);
         } catch (IOException e) {
             return null;
         }

@@ -68,6 +68,23 @@ final class FileStore {
         }
     }
 
+    /** Read a UTF-8 text file (API 24 compatible; no java.nio.file). */
+    static String readText(File f, long maxBytes) throws IOException {
+        if (f.length() > maxBytes) throw new IOException("too large");
+        try (java.io.InputStream in = new java.io.FileInputStream(f);
+             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream((int) Math.max(16, f.length()))) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            long total = 0;
+            while ((n = in.read(buf)) > 0) {
+                total += n;
+                if (total > maxBytes) throw new IOException("too large");
+                out.write(buf, 0, n);
+            }
+            return out.toString("UTF-8");
+        }
+    }
+
     static void cleanTemp(Context c, long olderThanMs) {
         long cutoff = System.currentTimeMillis() - olderThanMs;
         for (File d : new File[]{sharedDir(c), cameraDir(c), printDir(c), updatesDir(c)}) deleteOld(d, cutoff, false);

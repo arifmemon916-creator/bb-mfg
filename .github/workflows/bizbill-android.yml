@@ -102,6 +102,10 @@ jobs:
         working-directory: bizbill/android
         run: ./gradlew --no-daemon lintRelease testReleaseUnitTest
 
+      - name: Show lint findings
+        if: failure()
+        run: cat android/app/build/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt || true
+
       - name: Prepare signing key
         id: sign
         env:

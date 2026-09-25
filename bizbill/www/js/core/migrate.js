@@ -5,7 +5,7 @@
 // Rules: never delete a step, never change a released step, always keep old
 // records readable. Test every new step in tests/migrate.test.mjs.
 
-export const DATA_VERSION = 1;
+export const DATA_VERSION = 2;
 
 const STEPS = {
   // 1: initial format. Normalises records created by pre-release builds
@@ -22,6 +22,17 @@ const STEPS = {
     }
     for (const e of data.expenses || []) e.status = e.status || 'active';
     for (const p of data.products || []) if (p.trackStock == null) p.trackStock = true;
+    return data;
+  },
+  // 2: notification center, product images, payment attachments.
+  2: (data) => {
+    for (const p of data.products || []) if (p.lowStockAlert == null) p.lowStockAlert = true;
+    for (const p of data.payments || []) p.attachments = Array.isArray(p.attachments) ? p.attachments : [];
+    data.notifications = Array.isArray(data.notifications) ? data.notifications : [];
+    for (const s of data.settings || []) {
+      if (s.key !== 'app' || !s.ui || !Array.isArray(s.ui.dashboardCards)) continue;
+      for (const k of ['duetoday', 'overdue', 'paidtoday']) if (!s.ui.dashboardCards.includes(k)) s.ui.dashboardCards.push(k);
+    }
     return data;
   },
 };

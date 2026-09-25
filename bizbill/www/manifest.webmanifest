@@ -1,0 +1,14 @@
+{
+  "name": "BizBill",
+  "short_name": "BizBill",
+  "description": "Offline-first GST billing, inventory and accounts",
+  "start_url": "./index.html#/dashboard",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f2f4f7",
+  "theme_color": "#1f4e79",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

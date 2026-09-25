@@ -7,7 +7,7 @@
 // - Stock levels, party balances and invoice dues are derived from the
 //   transactions (never stored twice), so they cannot drift.
 
-import { Database, newId } from './db.js';
+import { Database, newId, DATA_STORES } from './db.js';
 import { computeDocument, isInterState } from './calc.js';
 import { mulDivRound, pctToBp, sum, formatMoney } from './money.js';
 import { mergeSettings, formatDocNumber, DOC_KINDS } from './settings.js';
@@ -15,6 +15,7 @@ import { computePartyAccount, paymentStatus } from './ledger.js';
 import { gstinError, mobileError, normalizeGstin, emailError } from './validate.js';
 import { today, nowStamp, isValidISODate } from './dates.js';
 import { DATA_VERSION, migrateData } from './migrate.js';
+import { parseDataUrl, IMAGE_TYPES, LIMITS, safeFileName } from './files.js';
 
 export class ValidationError extends Error {
   constructor(messages) {
@@ -46,7 +47,7 @@ export class BizStore {
   }
 
   async reload() {
-    const [settings, parties, products, documents, payments, expenses, stockMoves, meta] = await Promise.all([
+    const [settings, parties, products, documents, payments, expenses, stockMoves, meta, notifications] = await Promise.all([
       this.db.get('settings', 'app'),
       this.db.getAll('parties'),
       this.db.getAll('products'),
@@ -55,6 +56,7 @@ export class BizStore {
       this.db.getAll('expenses'),
       this.db.getAll('stockMoves'),
       this.db.getAll('meta'),
+      this.db.getAll('notifications'),
     ]);
     this.settings = mergeSettings(settings);
     this.parties = new Map(parties.map((r) => [r.id, r]));
@@ -64,17 +66,34 @@ export class BizStore {
     this.expenses = new Map(expenses.map((r) => [r.id, r]));
     this.stockMoves = new Map(stockMoves.map((r) => [r.id, r]));
     this.meta = new Map(meta.map((r) => [r.key, r.value]));
+    this.notifications = new Map(notifications.map((r) => [r.id, r]));
     this.touch();
   }
 
+  /**
+   * Upgrade stored records to the current data format.
+   * Safety: a snapshot of the pre-migration data is saved first; the new data
+   * is written in ONE atomic transaction, so a failure leaves the original
+   * records untouched. `this.migrationError` is set for the UI to report.
+   */
   async runDataMigrations() {
     const current = this.meta.get('dataVersion') || 0;
-    const hasData = this.parties.size || this.products.size || this.documents.size;
     if (current >= DATA_VERSION) return;
-    if (hasData && current < DATA_VERSION) {
-      const data = await this.exportStores();
-      const migrated = migrateData(data, current);
-      await this.replaceAll(migrated, 'migration');
+    const hasData = this.parties.size || this.products.size || this.documents.size || this.payments.size;
+    if (hasData) {
+      try {
+        const data = await this.exportStores();
+        await this.db.write([{ store: 'snapshots', op: 'put', value: {
+          id: newId('s'), createdAt: nowStamp(), reason: 'before-migration', counts: {},
+          json: JSON.stringify({ format: 'bizbill-backup', formatVersion: 2, dataVersion: current, createdAt: nowStamp(), data, unverified: true }),
+        } }]);
+        const migrated = migrateData(structuredClone(data), current);
+        await this.replaceAll(migrated, 'migration');
+      } catch (e) {
+        this.migrationError = e;
+        console.error('Data migration failed; original data kept', e);
+        return;
+      }
     }
     await this.db.write([{ store: 'meta', op: 'put', value: { key: 'dataVersion', value: DATA_VERSION } }]);
     this.meta.set('dataVersion', DATA_VERSION);
@@ -123,6 +142,7 @@ export class BizStore {
       case 'payments': return this.payments;
       case 'expenses': return this.expenses;
       case 'stockMoves': return this.stockMoves;
+      case 'notifications': return this.notifications;
       default: return null;
     }
   }
@@ -144,12 +164,19 @@ export class BizStore {
 
   // ------------------------------------------------------------- settings
 
+  /** Save settings. Pass auditSummary = null for silent housekeeping updates. */
   async saveSettings(next, auditSummary = 'Settings updated') {
     const value = { ...mergeSettings(next), key: 'app' };
-    await this.commit([
-      { store: 'settings', op: 'put', value },
-      this.auditOp('settings.update', 'settings', 'app', auditSummary),
-    ]);
+    const ops = [{ store: 'settings', op: 'put', value }];
+    if (auditSummary) ops.push(this.auditOp('settings.update', 'settings', 'app', auditSummary));
+    await this.commit(ops);
+  }
+
+  /** Update a settings section with a patch, e.g. patchSettings('backup', {lastBackupAt}). */
+  async patchSettings(section, patch, auditSummary = null) {
+    const next = structuredClone(this.settings);
+    next[section] = { ...next[section], ...patch };
+    await this.saveSettings(next, auditSummary);
   }
 
   money(p) {
@@ -328,6 +355,48 @@ export class BizStore {
       this.auditOp('stock.adjust', 'product', productId, `Stock adjusted for ${p.name}: ${qty > 0 ? '+' : ''}${qty / 1000} (${clean(reason)})`),
     ]);
     return mv;
+  }
+
+  /**
+   * Set / replace a product image. img: {data, thumb, sha256}
+   * The full image goes to the attachments store; a tiny thumbnail is kept
+   * on the product for fast lists. Identical images are stored once.
+   */
+  async setProductImage(productId, img) {
+    const p = this.products.get(productId);
+    if (!p) throw new ValidationError('Product not found');
+    const full = parseDataUrl(img && img.data);
+    const thumb = parseDataUrl(img && img.thumb);
+    if (!full || !IMAGE_TYPES.includes(full.mime) || !thumb) throw new ValidationError('Image is not a valid JPEG, PNG or WebP file');
+    if (full.size > 2 * 1024 * 1024) throw new ValidationError('Image is too large after compression');
+    const ops = [];
+    const twin = [...this.products.values()].find((x) => x.id !== productId && x.imageSha && x.imageSha === img.sha256 && x.imageId);
+    let imageId = twin ? twin.imageId : '';
+    if (!imageId) {
+      imageId = newId('f');
+      ops.push({ store: 'attachments', op: 'put', value: { id: imageId, kind: 'product-image', mime: full.mime, data: img.data, sha256: img.sha256 || '', createdAt: nowStamp() } });
+    }
+    ops.push(...this.releaseImageOps(p, imageId));
+    ops.push({ store: 'products', op: 'put', value: { ...p, imageId, imageSha: img.sha256 || '', thumb: img.thumb, updatedAt: nowStamp() } });
+    ops.push(this.auditOp('product.image', 'product', productId, `Product image ${p.imageId ? 'changed' : 'added'}: ${p.name}`));
+    await this.commit(ops);
+  }
+
+  async removeProductImage(productId) {
+    const p = this.products.get(productId);
+    if (!p || !p.imageId) return;
+    await this.commit([
+      ...this.releaseImageOps(p, ''),
+      { store: 'products', op: 'put', value: { ...p, imageId: '', imageSha: '', thumb: '', updatedAt: nowStamp() } },
+      this.auditOp('product.image', 'product', productId, `Product image removed: ${p.name}`),
+    ]);
+  }
+
+  /** Delete a product's old image if no other product uses it. */
+  releaseImageOps(p, keepId) {
+    if (!p.imageId || p.imageId === keepId) return [];
+    const shared = [...this.products.values()].some((x) => x.id !== p.id && x.imageId === p.imageId);
+    return shared ? [] : [{ store: 'attachments', op: 'delete', key: p.imageId }];
   }
 
   // ------------------------------------------------------------ derived
@@ -546,7 +615,9 @@ export class BizStore {
         ewayBill: clean(draft.transport?.ewayBill),
         notes: clean(draft.transport?.notes),
       },
-      paymentMethod: draft.paymentMethod || b.defaultPaymentMethod,
+      paymentMethod: (opts.payment && opts.payment.amount > 0 && opts.payment.method) || draft.paymentMethod || b.defaultPaymentMethod,
+      // Per-document reminder schedule; null = use the default from settings.
+      reminders: normalizeReminders(draft.reminders !== undefined ? draft.reminders : existing ? existing.reminders : null),
       status: existing ? existing.status : 'active',
       updatedAt: nowStamp(),
       createdAt: (existing && existing.createdAt) || nowStamp(),
@@ -723,7 +794,6 @@ export class BizStore {
     return docs.map((d) => ({ doc: d, due: this.docDue(d) + (ownAlloc.get(d.id) || 0) }))
       .filter((x) => x.due > 0 || ownAlloc.has(x.doc.id))
       .sort((a, b) => (a.doc.date < b.doc.date ? -1 : 1));
-    void direction;
   }
 
   /** FIFO auto allocation proposal. */
@@ -758,6 +828,10 @@ export class BizStore {
       reference: clean(input.reference),
       notes: clean(input.notes),
       allocations: (input.allocations || []).filter((a) => a.amount > 0).map((a) => ({ docId: a.docId, amount: Math.trunc(a.amount) })),
+      billNo: clean(input.billNo),
+      chequeBank: input.method === 'Cheque' ? clean(input.chequeBank) : '',
+      dueDate: input.dueDate || '',
+      attachments: existing ? existing.attachments || [] : [],
       status: existing ? existing.status : 'active',
       source: (existing && existing.source) || 'manual',
       createdAt: (existing && existing.createdAt) || nowStamp(),
@@ -780,9 +854,29 @@ export class BizStore {
     }
     const dupe = this.listPayments(direction).find((x) => x.id !== p.id && x.number.toLowerCase() === p.number.toLowerCase());
     if (dupe) errs.push(`Number ${p.number} already exists`);
+    if (p.dueDate && !isValidISODate(p.dueDate)) errs.push('Due date is invalid');
+    const attOps = [];
+    if (Array.isArray(input.attachments)) {
+      // input.attachments: [{id} kept | {name, data} new]; max 4, validated by content.
+      if (input.attachments.length > LIMITS.paymentAttachments) errs.push(`At most ${LIMITS.paymentAttachments} attachments are allowed`);
+      const keep = [];
+      for (const a of input.attachments.slice(0, LIMITS.paymentAttachments)) {
+        const old = (p.attachments || []).find((x) => x.id === a.id);
+        if (old && !a.data) { keep.push(old); continue; }
+        const parsed = parseDataUrl(a.data);
+        if (!parsed || (parsed.mime !== 'application/pdf' && !IMAGE_TYPES.includes(parsed.mime))) { errs.push(`Attachment "${safeFileName(a.name)}" is not a valid photo or PDF`); continue; }
+        if (parsed.mime === 'application/pdf' && parsed.size > LIMITS.pdfBytes) { errs.push(`PDF "${safeFileName(a.name)}" is larger than 5 MB`); continue; }
+        const id = newId('f');
+        attOps.push({ store: 'attachments', op: 'put', value: { id, kind: 'payment', ownerId: p.id, name: safeFileName(a.name, 'attachment'), mime: parsed.mime, data: a.data, createdAt: nowStamp() } });
+        keep.push({ id, name: safeFileName(a.name, 'attachment'), mime: parsed.mime, size: parsed.size });
+      }
+      for (const old of p.attachments || []) if (!keep.some((k) => k.id === old.id)) attOps.push({ store: 'attachments', op: 'delete', key: old.id });
+      p.attachments = keep;
+    }
     if (errs.length) throw new ValidationError(errs);
     if (!existing) this.numberingOps(numKind, p.number, s);
     await this.commit([
+      ...attOps,
       { store: 'payments', op: 'put', value: p },
       { store: 'settings', op: 'put', value: s },
       this.auditOp(`payment.${existing ? 'edit' : 'create'}`, 'payment', p.id,
@@ -832,6 +926,7 @@ export class BizStore {
     if (!isValidISODate(e.date)) errs.push('Date is invalid');
     if (errs.length) throw new ValidationError(errs);
     const ops = [];
+    if (existing && existing.attachmentId && !e.attachmentId) ops.push({ store: 'attachments', op: 'delete', key: existing.attachmentId });
     if (attachment) {
       const id = newId('f');
       ops.push({ store: 'attachments', op: 'put', value: { id, name: attachment.name || 'receipt', mime: attachment.mime, data: attachment.data, createdAt: nowStamp() } });
@@ -857,6 +952,67 @@ export class BizStore {
     return this.db.get('attachments', id);
   }
 
+  // ------------------------------------------------------------ notification center
+
+  listNotifications(type) {
+    return [...this.notifications.values()].filter((x) => !type || x.type === type).sort((a, b) => (a.ts < b.ts ? 1 : -1));
+  }
+
+  unreadCount() {
+    let n = 0;
+    for (const x of this.notifications.values()) if (!x.read) n++;
+    return n;
+  }
+
+  /** Add alerts to the in-app notification center (keeps the newest 500). */
+  async addNotifications(list, alertState) {
+    const ops = list.map((x) => ({
+      store: 'notifications', op: 'put',
+      value: {
+        id: newId('n'), ts: nowStamp(), type: x.type, title: String(x.title).slice(0, 120), message: String(x.message || '').slice(0, 1000),
+        read: false, relatedType: x.relatedType || '', relatedId: x.relatedId || '', route: x.route || '',
+      },
+    }));
+    if (alertState) ops.push({ store: 'meta', op: 'put', value: { key: 'alertState', value: alertState } });
+    const overflow = this.notifications.size + list.length - 500;
+    if (overflow > 0) {
+      const oldest = [...this.notifications.values()].sort((a, b) => (a.ts < b.ts ? -1 : 1)).slice(0, overflow);
+      for (const o of oldest) ops.push({ store: 'notifications', op: 'delete', key: o.id });
+    }
+    if (!ops.length) return [];
+    await this.commit(ops);
+    if (alertState) this.meta.set('alertState', alertState);
+    return ops.filter((o) => o.store === 'notifications' && o.op === 'put').map((o) => o.value);
+  }
+
+  async setNotificationRead(id, read = true) {
+    const x = this.notifications.get(id);
+    if (!x || x.read === read) return;
+    await this.commit([{ store: 'notifications', op: 'put', value: { ...x, read } }]);
+  }
+
+  async markAllNotificationsRead() {
+    const ops = [...this.notifications.values()].filter((x) => !x.read).map((x) => ({ store: 'notifications', op: 'put', value: { ...x, read: true } }));
+    if (ops.length) await this.commit(ops);
+  }
+
+  async deleteNotification(id) {
+    if (this.notifications.has(id)) await this.commit([{ store: 'notifications', op: 'delete', key: id }]);
+  }
+
+  async saveAlertState(state) {
+    await this.db.write([{ store: 'meta', op: 'put', value: { key: 'alertState', value: state } }]);
+    this.meta.set('alertState', state);
+  }
+
+  /** Snooze due/overdue alerts of a document until a date. */
+  async snoozeDocument(docId, untilISO) {
+    const st = structuredClone(this.meta.get('alertState') || { low: {}, due: {}, overdue: {}, snooze: {} });
+    st.snooze = st.snooze || {};
+    st.snooze[docId] = untilISO;
+    await this.saveAlertState(st);
+  }
+
   // ------------------------------------------------------------ audit
 
   async listAudit(limit = 500) {
@@ -873,7 +1029,7 @@ export class BizStore {
 
   async exportStores() {
     const data = {};
-    for (const store of ['settings', 'parties', 'products', 'documents', 'payments', 'expenses', 'stockMoves', 'audit', 'attachments', 'meta']) {
+    for (const store of DATA_STORES) {
       data[store] = await this.db.getAll(store);
     }
     return data;
@@ -882,7 +1038,7 @@ export class BizStore {
   /** Atomically replace all business data (restore / migration). */
   async replaceAll(data, reason = 'restore') {
     const ops = [];
-    for (const store of ['settings', 'parties', 'products', 'documents', 'payments', 'expenses', 'stockMoves', 'audit', 'attachments', 'meta']) {
+    for (const store of DATA_STORES) {
       ops.push({ store, op: 'clear' });
       for (const value of data[store] || []) ops.push({ store, op: 'put', value });
     }
@@ -891,6 +1047,12 @@ export class BizStore {
     await this.db.write(ops);
     await this.reload();
   }
+}
+
+function normalizeReminders(r) {
+  if (!r || !Array.isArray(r.offsets)) return null;
+  const offsets = [...new Set(r.offsets.map((n) => Math.trunc(n)).filter((n) => n >= 0 && n <= 60))].sort((a, b) => a - b);
+  return { offsets };
 }
 
 function cap(s) {

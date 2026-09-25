@@ -12,7 +12,7 @@ export function parseCSV(text) {
   let field = '';
   let i = 0;
   let inQuotes = false;
-  text = String(text || '').replace(/^﻿/, '');
+  text = String(text || '').replace(/^\uFEFF/, '');
   while (i < text.length) {
     const c = text[i];
     if (inQuotes) {

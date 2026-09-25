@@ -2,12 +2,16 @@
 // business store (no caches, no local snapshots) plus a SHA-256 checksum.
 
 import { DATA_VERSION, migrateData } from './migrate.js';
-import { newId } from './db.js';
+import { newId, DATA_STORES } from './db.js';
 import { nowStamp } from './dates.js';
+import { isValidAttachment } from './files.js';
 
 export const BACKUP_FORMAT = 'bizbill-backup';
+export const ENCRYPTED_FORMAT = 'bizbill-backup-encrypted';
+// 1 = initial; 2 = adds notifications, product images, payment attachments, encryption envelope.
+export const BACKUP_FORMAT_VERSION = 2;
 export const APP_VERSION = '1.0.0';
-const STORES = ['settings', 'parties', 'products', 'documents', 'payments', 'expenses', 'stockMoves', 'audit', 'attachments', 'meta'];
+const STORES = DATA_STORES;
 const COUNT_LABELS = {
   parties: 'Customers & suppliers', products: 'Products', documents: 'Invoices / purchases / quotations',
   payments: 'Payments', expenses: 'Expenses', stockMoves: 'Stock adjustments', attachments: 'Attachments', audit: 'Activity entries',
@@ -38,6 +42,7 @@ export async function createBackup(store) {
   const payload = JSON.stringify(data);
   return {
     format: BACKUP_FORMAT,
+    formatVersion: BACKUP_FORMAT_VERSION,
     appVersion: APP_VERSION,
     dataVersion: DATA_VERSION,
     createdAt: nowStamp(),
@@ -61,7 +66,9 @@ export function backupFileName(company, date = new Date()) {
 export async function validateBackup(obj) {
   const errors = [];
   if (!obj || typeof obj !== 'object') return { ok: false, errors: ['File is not a BizBill backup'] };
+  if (obj.format === ENCRYPTED_FORMAT) return { ok: false, encrypted: true, errors: ['This backup is password protected'] };
   if (obj.format !== BACKUP_FORMAT) errors.push('File is not a BizBill backup');
+  if (obj.formatVersion != null && obj.formatVersion > BACKUP_FORMAT_VERSION) errors.push('Backup format is newer than this app. Update BizBill first.');
   if (!obj.data || typeof obj.data !== 'object') errors.push('Backup has no data section');
   if (typeof obj.dataVersion !== 'number') errors.push('Backup version is missing');
   else if (obj.dataVersion > DATA_VERSION) errors.push('Backup was made by a newer version of BizBill. Update the app first.');
@@ -92,10 +99,13 @@ export async function validateBackup(obj) {
   for (const p of obj.data.payments || []) {
     if (!Number.isInteger(p.amount)) { errors.push(`Payment ${p.number || p.id} has an invalid amount`); break; }
   }
+  const badAttachments = (obj.data.attachments || []).filter((a) => !isValidAttachment(a)).length;
+  const warnings = badAttachments ? [`${badAttachments} damaged image/attachment(s) will be skipped`] : [];
   const counts = countsOf(obj.data);
   return {
     ok: errors.length === 0,
     errors,
+    warnings,
     info: {
       createdAt: obj.createdAt, appVersion: obj.appVersion, dataVersion: obj.dataVersion, company: obj.company,
       counts, countLabels: COUNT_LABELS,
@@ -146,7 +156,82 @@ export async function restoreBackup(store, obj, { safety = true } = {}) {
   let app = data.settings.find((s) => s.key === 'app');
   if (!app) { app = { key: 'app' }; data.settings.push(app); }
   app.security = structuredClone(store.settings.security);
+  // Skip damaged attachments instead of failing the whole restore.
+  const good = (data.attachments || []).filter(isValidAttachment);
+  const goodIds = new Set(good.map((a) => a.id));
+  const skipped = (data.attachments || []).length - good.length;
+  data.attachments = good;
+  for (const p of data.products || []) if (p.imageId && !goodIds.has(p.imageId)) { p.imageId = ''; p.imageSha = ''; p.thumb = ''; }
+  for (const p of data.payments || []) if (Array.isArray(p.attachments)) p.attachments = p.attachments.filter((a) => goodIds.has(a.id));
+  for (const e of data.expenses || []) if (e.attachmentId && !goodIds.has(e.attachmentId)) e.attachmentId = '';
   app.backup = structuredClone(store.settings.backup);
   await store.replaceAll(data, 'restore');
-  return { safetySnapshotId: safetySnap ? safetySnap.id : null };
+  return { safetySnapshotId: safetySnap ? safetySnap.id : null, skippedAttachments: skipped };
+}
+
+// ---------------------------------------------------------------- encryption
+// Password protected backups: AES-256-GCM, key from PBKDF2-SHA256 (310k
+// iterations, random salt). GCM authenticates the data, so a wrong password
+// or any modification is detected.
+
+const ENC_ITERATIONS = 310000;
+
+function b64(bytes) {
+  let bin = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  return btoa(bin);
+}
+
+function unb64(str) {
+  const bin = atob(str);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function deriveKey(password, salt, iterations) {
+  const subtle = globalThis.crypto.subtle;
+  const base = await subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+export function backupPasswordError(pw) {
+  if (String(pw || '').length < 8) return 'Use at least 8 characters for the backup password';
+  return '';
+}
+
+export async function encryptBackup(backup, password) {
+  const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveKey(password, salt, ENC_ITERATIONS);
+  const plain = new TextEncoder().encode(JSON.stringify(backup));
+  const cipher = new Uint8Array(await globalThis.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain));
+  return {
+    format: ENCRYPTED_FORMAT,
+    formatVersion: BACKUP_FORMAT_VERSION,
+    createdAt: backup.createdAt,
+    company: backup.company,
+    counts: backup.counts,
+    kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: ENC_ITERATIONS, salt: b64(salt) },
+    cipher: { name: 'AES-GCM', iv: b64(iv) },
+    payload: b64(cipher),
+  };
+}
+
+export function isEncryptedBackup(obj) {
+  return !!obj && obj.format === ENCRYPTED_FORMAT;
+}
+
+export async function decryptBackup(env, password) {
+  if (!isEncryptedBackup(env) || !env.kdf || !env.cipher || typeof env.payload !== 'string') throw new Error('Encrypted backup is damaged');
+  const iterations = Math.min(Math.max(Number(env.kdf.iterations) || 0, 100000), 5000000);
+  let plain;
+  try {
+    const key = await deriveKey(password, unb64(env.kdf.salt), iterations);
+    plain = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.cipher.iv) }, key, unb64(env.payload));
+  } catch {
+    throw new Error('Wrong password, or the backup file is damaged');
+  }
+  return JSON.parse(new TextDecoder().decode(plain));
 }

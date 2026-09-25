@@ -6,12 +6,12 @@
 // everything is stored or nothing is.
 
 export const DB_NAME = 'bizbill';
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 // Business data stores (included in backups).
 export const DATA_STORES = [
   'settings', 'parties', 'products', 'documents', 'payments',
-  'expenses', 'stockMoves', 'audit', 'attachments', 'meta',
+  'expenses', 'stockMoves', 'audit', 'attachments', 'meta', 'notifications',
 ];
 // Local-only stores (never included in backups).
 export const LOCAL_STORES = ['snapshots'];
@@ -37,6 +37,11 @@ function upgrade(db, oldVersion, tx) {
     db.createObjectStore('audit', { keyPath: 'id' });
     db.createObjectStore('attachments', { keyPath: 'id' });
     db.createObjectStore('snapshots', { keyPath: 'id' });
+  }
+  // Version 2: in-app notification center.
+  if (oldVersion < 2) {
+    const n = db.createObjectStore('notifications', { keyPath: 'id' });
+    n.createIndex('ts', 'ts');
   }
   void tx;
 }

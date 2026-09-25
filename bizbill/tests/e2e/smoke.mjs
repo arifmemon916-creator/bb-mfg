@@ -2,7 +2,9 @@
 import { chromium } from 'playwright-core';
 import { start } from '../../tools/serve.mjs';
 
-const exe = process.env.CHROME || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+import fs2 from 'node:fs';
+const local = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const exe = process.env.CHROME || (fs2.existsSync(local) ? local : chromium.executablePath());
 const server = await start(8181);
 const browser = await chromium.launch({ executablePath: exe });
 const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });

@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { start } from '../../tools/serve.mjs';
 
-const exe = process.env.CHROME || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+import fs2 from 'node:fs';
+const local = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const exe = process.env.CHROME || (fs2.existsSync(local) ? local : chromium.executablePath());
 const shots = process.env.SHOTS || '';
 const server = await start(8182);
 const browser = await chromium.launch({ executablePath: exe });

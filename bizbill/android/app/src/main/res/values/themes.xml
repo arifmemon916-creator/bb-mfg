@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Splash (Android 12 SplashScreen API, back-ported by core-splashscreen). -->
+    <style name="Theme.BizBill.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/brand</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash</item>
+        <item name="postSplashScreenTheme">@style/Theme.BizBill</item>
+    </style>
+
+    <!-- Window background matches the app so there is no white flash. -->
+    <style name="Theme.BizBill" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_bg</item>
+        <item name="android:colorPrimary">@color/brand</item>
+        <item name="android:colorAccent">@color/brand</item>
+        <item name="android:statusBarColor">@color/brand</item>
+        <item name="android:navigationBarColor">@color/window_bg</item>
+    </style>
+
+    <style name="Theme.BizBill.Alert" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/alert_bg</item>
+        <item name="android:statusBarColor">@color/alert_bg</item>
+    </style>
+</resources>

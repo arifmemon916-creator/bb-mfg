@@ -2,3 +2,14 @@ node_modules
 turntable/out/frames-*/
 turntable/out/preview-*/
 turntable/out/*.log
+# BizBill
+bizbill/dist/
+bizbill/android/.gradle/
+bizbill/android/build/
+bizbill/android/app/build/
+bizbill/android/local.properties
+bizbill/android/.idea/
+*.jks
+*.keystore
+*.p12
+keystore.properties

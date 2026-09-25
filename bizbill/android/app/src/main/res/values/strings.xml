@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BizBill</string>
+    <string name="error_generic">Something went wrong. Your data is safe. Please restart BizBill.</string>
+    <string name="error_webview">BizBill could not start its display engine. Please update "Android System WebView" from the Play Store.</string>
+    <string name="channel_payments">Payment reminders</string>
+    <string name="channel_payments_desc">Payment due and overdue reminders</string>
+    <string name="channel_stock">Stock alerts</string>
+    <string name="channel_stock_desc">Low stock alerts</string>
+    <string name="channel_important">Important alerts</string>
+    <string name="channel_important_desc">Full-screen alerts you enabled for payments or stock</string>
+    <string name="channel_general">General</string>
+    <string name="channel_general_desc">Backup reminders, updates and other notices</string>
+    <string name="snooze">Snooze</string>
+    <string name="dismiss">Dismiss</string>
+    <string name="view_details">View details</string>
+    <string name="update_failed">BizBill update was not installed</string>
+</resources>

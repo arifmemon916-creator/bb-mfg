@@ -106,6 +106,20 @@ jobs:
         if: failure()
         run: cat android/app/build/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt || true
 
+      - name: Build installable debug APK
+        # Gradle signs debug builds with an auto-generated debug key, so this
+        # is installable on a phone today (Settings > sideload) while the
+        # production keystore secrets are being set up. applicationIdSuffix
+        # ".debug" keeps it separate from the signed release app.
+        working-directory: bizbill/android
+        run: ./gradlew --no-daemon assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bizbill-debug-apk-${{ github.sha }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+
       - name: Prepare signing key
         id: sign
         env:

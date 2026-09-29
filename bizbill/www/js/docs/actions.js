@@ -65,6 +65,9 @@ export function invoiceSpec(store, doc) {
   if (doc.kind === 'sale' && due > 0) lines.push(`Balance due: ${money(due)}`);
   if (doc.kind === 'sale' && s.company.upiId && due > 0) lines.push(`Pay via UPI: ${s.company.upiId}`);
   lines.push('', `– ${s.company.name || 'BizBill'}`);
+  // Bill Format 4 (Thermal Receipt) prints on a narrow, single continuous
+  // page instead of A4, both for PDF and JPG.
+  const thermal = Math.trunc(s.billing.billFormat) === 4;
   return {
     title: `${kindName} ${doc.number}`,
     fileBase: safeName(`${kindName}_${doc.number}`),
@@ -72,6 +75,7 @@ export function invoiceSpec(store, doc) {
     phone: (party && (party.whatsapp || party.mobile)) || doc.party.mobile || '',
     email: (party && party.email) || '',
     shareText: lines.join('\n'),
+    layout: thermal ? { width: 80, height: 1000, margin: 4, continuous: true } : undefined,
     render: (L) => renderInvoice(L, doc, s, { paid, due, status: store.docStatus(doc), thumbs: productThumbs(store, doc) }),
   };
 }

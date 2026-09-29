@@ -9,7 +9,7 @@ import { profitAndLoss, gstSummary, dashboardMetrics, runReport, stockMovementSu
 import { createBackup, validateBackup, restoreBackup, listSnapshots } from '../www/js/core/backup.js';
 import { parseImport, commitImport, exportProducts, parseCSV } from '../www/js/core/csv.js';
 import { hashPin, verifyPin, pinError } from '../www/js/core/security.js';
-import { globalSearch } from '../www/js/core/search.js';
+import { globalSearch, findPartyMatch } from '../www/js/core/search.js';
 import { migrateData } from '../www/js/core/migrate.js';
 
 let n = 0;
@@ -307,6 +307,30 @@ test('global search finds invoices, parties, products and payments', async () =>
   assert.ok(globalSearch(s, 'PEN-1').some((r) => r.type === 'product'));
   assert.ok(globalSearch(s, 'utr998877').some((r) => r.type === 'payment'));
   assert.ok(globalSearch(s, '29AAGCB7383J1Z4').some((r) => r.type === 'customer'));
+});
+
+test('findPartyMatch offers auto-fill from the saved database by GSTIN or exact name', async () => {
+  const s = await freshStore();
+  const { cust, other } = await seed(s);
+  assert.equal(findPartyMatch(s, { gstin: cust.gstin }), null, 'Asha Stores has no GSTIN in seed(), so an empty GSTIN matches nothing');
+  assert.equal(findPartyMatch(s, { gstin: '29AAGCB7383J1Z4' }).id, other.id, 'exact GSTIN match');
+  assert.equal(findPartyMatch(s, { gstin: '29aagcb7383j1z4' }).id, other.id, 'GSTIN match is case-insensitive');
+  assert.equal(findPartyMatch(s, { name: 'Asha Stores' }).id, cust.id, 'exact name match');
+  assert.equal(findPartyMatch(s, { name: 'asha stores' }).id, cust.id, 'name match is case-insensitive');
+  assert.equal(findPartyMatch(s, { name: 'Asha' }), null, 'partial name is not enough');
+  assert.equal(findPartyMatch(s, { gstin: '27AAPFU0939F1ZA' }), null, 'invalid GSTIN checksum is never matched');
+  assert.equal(findPartyMatch(s, { gstin: '29AAGCB7383J1Z4' }, other.id), null, 'excludeId skips the party itself');
+  await s.deleteParty(other.id);
+  assert.equal(findPartyMatch(s, { gstin: '29AAGCB7383J1Z4' }), null, 'deleted parties are not suggested');
+});
+
+test('party default transport prefills new invoices without overriding a filled-in section', async () => {
+  const s = await freshStore();
+  const { cust } = await seed(s);
+  const saved = await s.saveParty({ ...cust, defaultTransport: { name: 'VRL Logistics', vehicle: 'mh12ab1234', shippingAddress: 'Warehouse 4' } });
+  assert.deepEqual(saved.defaultTransport, { name: 'VRL Logistics', vehicle: 'MH12AB1234', shippingAddress: 'Warehouse 4' });
+  const cleared = await s.saveParty({ ...saved, defaultTransport: null });
+  assert.equal(cleared.defaultTransport, null);
 });
 
 test('soft delete keeps records recoverable', async () => {

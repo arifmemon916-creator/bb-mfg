@@ -1,7 +1,33 @@
 // Global search across invoices, purchases, quotations, parties, products
 // and payments. Works on the in-memory cache, so it is instant offline.
 
+import { normalizeGstin, gstinError } from './validate.js';
+
 const fold = (s) => String(s || '').toLowerCase();
+
+/**
+ * Look up an existing saved customer/supplier by GSTIN or exact name, so a
+ * new-party form can offer to auto-fill from the app's own database (no
+ * external GST lookup is performed). GSTIN match wins; falls back to an
+ * exact, case-insensitive name match. Returns null when nothing matches.
+ */
+export function findPartyMatch(store, { gstin, name } = {}, excludeId) {
+  const g = normalizeGstin(gstin || '');
+  if (g && g.length === 15 && !gstinError(g)) {
+    for (const p of store.parties.values()) {
+      if (p.id === excludeId || p.deleted) continue;
+      if (p.gstin && p.gstin === g) return p;
+    }
+  }
+  const n = fold(name).trim();
+  if (n.length >= 3) {
+    for (const p of store.parties.values()) {
+      if (p.id === excludeId || p.deleted) continue;
+      if (fold(p.name) === n) return p;
+    }
+  }
+  return null;
+}
 
 export function matches(q, ...fields) {
   if (!q) return true;

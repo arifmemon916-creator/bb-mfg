@@ -7,7 +7,7 @@ import {
 } from '../ui/components.js';
 import { fmt, remember, rangeState, rangeOf, amountClass } from './common.js';
 import { STATES, stateName } from '../core/states.js';
-import { matches } from '../core/search.js';
+import { matches, findPartyMatch } from '../core/search.js';
 import { ledgerStatement, drCr, AGING_BUCKETS } from '../core/ledger.js';
 import { gstinError, mobileError } from '../core/validate.js';
 import { exportParties } from '../core/csv.js';
@@ -93,15 +93,43 @@ export function partyForm({ store, app }, params) {
     creditLimit: moneyInput('creditLimit', p.creditLimit),
     notes: textArea('notes', p.notes, { rows: 2 }),
   };
+  const dt = p.defaultTransport || {};
+  const transport = {
+    name: textInput('transportName', dt.name, { placeholder: 'Transporter' }),
+    vehicle: textInput('transportVehicle', dt.vehicle, { placeholder: 'e.g. MH12AB1234', style: { textTransform: 'uppercase' } }),
+    shippingAddress: textArea('transportShipping', dt.shippingAddress, { rows: 2, placeholder: 'Default shipping / delivery address' }),
+  };
   const gstErr = h('div', { class: 'err small' });
   const mobErr = h('div', { class: 'err small' });
-  for (const i of Object.values(inputs)) i.addEventListener('input', () => { dirty = true; });
+  const matchHint = h('div');
+  for (const i of [...Object.values(inputs), ...Object.values(transport)]) i.addEventListener('input', () => { dirty = true; });
+  const applyMatch = (found) => {
+    inputs.mobile.value = found.mobile || inputs.mobile.value;
+    inputs.whatsapp.value = found.whatsapp || inputs.whatsapp.value;
+    inputs.email.value = found.email || inputs.email.value;
+    inputs.gstin.value = found.gstin || inputs.gstin.value;
+    inputs.address.value = found.address || inputs.address.value;
+    inputs.city.value = found.city || inputs.city.value;
+    inputs.pincode.value = found.pincode || inputs.pincode.value;
+    if (found.stateCode) inputs.stateCode.value = found.stateCode;
+    clear(matchHint);
+  };
+  const checkMatch = () => {
+    clear(matchHint);
+    if (existing) return; // only offer this while creating a new party
+    const found = findPartyMatch(store, { gstin: inputs.gstin.value, name: inputs.name.value });
+    if (!found) return;
+    put(matchHint, h('button', { type: 'button', class: 'note', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', border: 0, cursor: 'pointer' }, onclick: () => applyMatch(found) },
+      h('span', null, `Found saved ${found.type}: ${found.name}${found.mobile ? ' · ' + found.mobile : ''} — tap to use these details`), icon('check')));
+  };
   inputs.gstin.addEventListener('change', () => {
     const g = inputs.gstin.value.trim().toUpperCase();
     inputs.gstin.value = g;
     gstErr.textContent = gstinError(g);
     if (!gstErr.textContent && g) inputs.stateCode.value = g.slice(0, 2);
+    checkMatch();
   });
+  inputs.name.addEventListener('change', checkMatch);
   inputs.mobile.addEventListener('change', () => { mobErr.textContent = mobileError(inputs.mobile.value); });
 
   const save = async () => {
@@ -128,6 +156,8 @@ export function partyForm({ store, app }, params) {
         openingDate: inputs.openingDate.value,
         creditLimit: cl.value,
         notes: inputs.notes.value.trim(),
+        defaultTransport: (transport.name.value || transport.vehicle.value || transport.shippingAddress.value)
+          ? { name: transport.name.value, vehicle: transport.vehicle.value, shippingAddress: transport.shippingAddress.value } : null,
       });
       dirty = false;
       toast(`${meta.one} saved`, 'good');
@@ -140,7 +170,8 @@ export function partyForm({ store, app }, params) {
       field('Name', inputs.name, { required: true }),
       h('div', { class: 'row' }, h('div', { class: 'field' }, field('Mobile', inputs.mobile), mobErr), field('WhatsApp', inputs.whatsapp)),
       field('Email', inputs.email),
-      h('div', null, field('GSTIN', inputs.gstin, { hint: 'State is filled from the GSTIN automatically' }), gstErr)),
+      h('div', null, field('GSTIN', inputs.gstin, { hint: 'State is filled from the GSTIN automatically; a matching saved party is offered below' }), gstErr),
+      matchHint),
     h('div', { class: 'card form' },
       h('h2', null, 'Address'),
       field('Address', inputs.address),
@@ -152,6 +183,12 @@ export function partyForm({ store, app }, params) {
       field('Opening balance type', inputs.openingDir),
       type === 'customer' ? field('Credit limit', inputs.creditLimit, { hint: 'You are warned when an invoice exceeds this' }) : null,
       field('Notes', inputs.notes)),
+    h('div', { class: 'card' }, h('details', { class: 'more', open: !!(dt.name || dt.vehicle || dt.shippingAddress) },
+      h('summary', null, 'Default transport (optional)'),
+      h('div', { class: 'form' },
+        h('p', { class: 'small muted' }, `Filled in automatically on new invoices for this ${type} (only when the invoice's own transport section is still empty).`),
+        h('div', { class: 'row' }, field('Transport name', transport.name), field('Vehicle number', transport.vehicle)),
+        field('Shipping / delivery address', transport.shippingAddress)))),
   );
   return {
     title: existing ? 'Edit ' + meta.one : 'New ' + meta.one,

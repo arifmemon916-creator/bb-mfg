@@ -229,6 +229,14 @@ export class BizStore {
       stateCode: input.stateCode || (normalizeGstin(input.gstin).slice(0, 2)) || '',
       openingBalance: Math.trunc(input.openingBalance || 0),
       creditLimit: Math.trunc(input.creditLimit || 0),
+      // Optional default transport, reused to prefill new invoices for this customer.
+      defaultTransport: input.defaultTransport === undefined
+        ? (existing && existing.defaultTransport) || null
+        : input.defaultTransport ? {
+          name: clean(input.defaultTransport.name),
+          vehicle: clean(input.defaultTransport.vehicle).toUpperCase(),
+          shippingAddress: clean(input.defaultTransport.shippingAddress),
+        } : null,
       deleted: !!(existing && existing.deleted && input.deleted !== false),
       updatedAt: nowStamp(),
       createdAt: (existing && existing.createdAt) || nowStamp(),
@@ -568,6 +576,8 @@ export class BizStore {
       city: clean(draft.party?.city ?? party?.city),
       state: clean(draft.party?.state ?? party?.state),
       stateCode: clean(draft.party?.stateCode ?? party?.stateCode),
+      pincode: clean(draft.party?.pincode ?? party?.pincode),
+      email: clean(draft.party?.email ?? party?.email),
     };
     const items = (draft.items || []).map((it) => {
       const prod = it.productId ? this.products.get(it.productId) : null;

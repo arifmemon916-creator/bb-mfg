@@ -72,7 +72,7 @@ try {
   await page.locator('.sheet .item').filter({ hasText: 'LED Bulb 9W' }).first().click();
   await page.waitForTimeout(200);
   await page.fill('.line input[name=qty]', '5');
-  await page.locator('.card').filter({ hasText: 'Customer' }).first().getByText('Select customer').click();
+  await page.locator('.card').filter({ hasText: 'Customer' }).first().getByText('Tap to select customer').click();
   await page.locator('.sheet .item').filter({ hasText: 'Rahul Traders' }).first().click();
   await fill('input[name=payAmount]', '200');
   await page.waitForTimeout(300);

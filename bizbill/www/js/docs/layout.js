@@ -157,14 +157,20 @@ export class Layout {
     const pad = 1.2;
     const lh = this.lh(size);
     const headFill = opts.headFill || '#1f4e79';
+    const headColor = opts.headColor || '#ffffff';
+    // opts.grid draws an outer border + column separators (one ruled-book
+    // "segment" per page the table spans, since a mid-page break can't be
+    // closed off until we know where the table ends on that page).
+    const segments = [];
     const drawHead = () => {
       const hh = lh + 2 * pad;
       this.ensure(hh + lh);
-      this.rect(x0, this.y, totalW, hh, { fill: headFill });
+      if (opts.grid) segments.push({ page: this.page, y0: this.y });
+      this.rect(x0, this.y, totalW, hh, opts.grid ? { stroke: '#333333', lw: 0.25 } : { fill: headFill });
       let x = x0;
       columns.forEach((c, i) => {
         const tx = c.align === 'right' ? x + widths[i] - pad : c.align === 'center' ? x + widths[i] / 2 : x + pad;
-        this.text(c.label, tx, this.y + pad + lh * 0.75, { size, style: 'bold', color: '#ffffff', align: c.align || 'left' });
+        this.text(c.label, tx, this.y + pad + lh * 0.75, { size, style: 'bold', color: opts.grid ? '#111111' : headColor, align: c.align || 'left' });
         x += widths[i];
       });
       this.y += hh;
@@ -194,8 +200,17 @@ export class Layout {
         x += widths[i];
       });
       this.y += rh;
-      this.line(x0, this.y, x0 + totalW, this.y, 0.1, '#d0d7e1');
+      this.line(x0, this.y, x0 + totalW, this.y, opts.grid ? 0.2 : 0.1, opts.grid ? '#333333' : '#d0d7e1');
     });
+    if (opts.grid && segments.length) {
+      const xs = [x0];
+      widths.forEach((w) => xs.push(xs[xs.length - 1] + w));
+      segments.forEach((seg, i) => {
+        const segEnd = i < segments.length - 1 ? this.bottom : this.y;
+        for (const px of xs) this.ops.push({ t: 'line', p: seg.page, x1: px, y1: seg.y0, x2: px, y2: segEnd, w: 0.25, color: '#333333' });
+        this.ops.push({ t: 'rect', p: seg.page, x: x0, y: seg.y0, w: totalW, h: segEnd - seg.y0, fill: null, stroke: '#333333', lw: 0.3 });
+      });
+    }
     return widths;
   }
 

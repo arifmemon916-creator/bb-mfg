@@ -25,6 +25,16 @@ export const EXPENSE_CATEGORIES = ['Rent', 'Salary', 'Electricity', 'Transport',
 export const UNITS = ['PCS', 'NOS', 'BOX', 'KG', 'GM', 'LTR', 'ML', 'MTR', 'CM', 'FT', 'SQFT', 'DOZ', 'PKT', 'SET', 'PAIR', 'BAG', 'ROLL', 'BTL', 'CAN', 'HRS', 'DAYS', 'JOB'];
 export const DATE_FORMATS = ['DD-MM-YYYY', 'DD/MM/YYYY', 'YYYY-MM-DD', 'DD MMM YYYY', 'MM/DD/YYYY'];
 
+/** Invoice / purchase / quotation print layouts. Selected in Settings → Billing. */
+export const BILL_FORMATS = [
+  [1, 'Standard (Detailed)', 'Full GST tax invoice with HSN summary, bank details and terms'],
+  [2, 'Compact', 'Same details, tighter spacing — fits more on one page'],
+  [3, 'Classic Ruled', 'Traditional bordered ledger-book style, black & white friendly'],
+  [4, 'Thermal Receipt (80mm)', 'Narrow roll printout for POS/thermal printers'],
+  [5, 'Modern', 'Bold colour banner and larger totals'],
+  [6, 'Minimal', 'Plain lines, no colour — clean and understated'],
+];
+
 export const DASHBOARD_CARDS = [
   ['sales', 'Sales'],
   ['purchases', 'Purchases'],
@@ -108,6 +118,7 @@ export function defaultSettings() {
       showProductImage: false,
       paperSize: 'a4',
       dueDays: 0,
+      billFormat: 1, // see BILL_FORMATS
     },
     ui: {
       theme: 'system', // light | dark | system

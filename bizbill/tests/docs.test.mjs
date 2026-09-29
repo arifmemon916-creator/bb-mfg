@@ -65,6 +65,26 @@ test('receipt, ledger and every report render', async () => {
   }
 });
 
+test('all 6 bill formats render, including thermal receipt and ruled grid', async () => {
+  const { s, doc } = await setup();
+  for (let format = 1; format <= 6; format++) {
+    const st = structuredClone(s.settings);
+    st.billing.billFormat = format;
+    const opts = format === 4 ? { width: 80, height: 1000, margin: 4, continuous: true } : {};
+    const L = renderInvoice(new Layout(measure, opts), doc, st, { paid: 0, due: doc.totals.grandTotal, status: 'unpaid' });
+    assert.ok(L.ops.length > 10, `format ${format} produced output`);
+    const pdf = toPdf(L, jsPDF, { title: doc.number });
+    assert.equal(Buffer.from(pdf.output('arraybuffer')).subarray(0, 5).toString(), '%PDF-', `format ${format} is a valid PDF`);
+    if (format === 4) {
+      assert.equal(L.W, 80, 'thermal format is narrow');
+      assert.equal(L.pages, 1, 'thermal format is a single continuous page');
+    }
+    if (format === 3) {
+      assert.ok(L.ops.some((o) => o.t === 'rect' && o.stroke && !o.fill), 'ruled format draws bordered cells');
+    }
+  }
+});
+
 test('pdfSafe replaces unsupported glyphs', () => {
   assert.equal(pdfSafe('₹100 – ok'), 'Rs. 100 - ok');
   assert.equal(pdfSafe('नमस्ते'), '??????');

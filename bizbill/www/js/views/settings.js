@@ -7,11 +7,13 @@ import {
 } from '../ui/components.js';
 import { STATES, stateName } from '../core/states.js';
 import { gstinError, emailError, mobileError, GST_RATES } from '../core/validate.js';
-import { PAYMENT_METHODS, UNITS, DATE_FORMATS, DASHBOARD_CARDS, NAV_TABS, formatDocNumber } from '../core/settings.js';
+import { PAYMENT_METHODS, UNITS, DATE_FORMATS, DASHBOARD_CARDS, NAV_TABS, BILL_FORMATS, formatDocNumber } from '../core/settings.js';
 import { hashPin, pinError, verifyPin } from '../core/security.js';
 import * as bridge from '../platform/bridge.js';
 import { formatDate, today } from '../core/dates.js';
 import { formatMoney } from '../core/money.js';
+import { renderInvoice } from '../docs/templates.js';
+import { previewPdf } from '../docs/actions.js';
 
 const link = (href, ic, title, sub) => h('a', { class: 'item', href },
   h('div', { class: 'avatar' }, icon(ic)), h('div', { class: 'main' }, h('div', { class: 'title' }, title), sub ? h('div', { class: 'subtitle' }, sub) : null));
@@ -172,8 +174,34 @@ export function billingSettings(ctx) {
     showHsnSummary: h('input', { type: 'checkbox', checked: b.showHsnSummary }),
     showProductImage: h('input', { type: 'checkbox', checked: !!b.showProductImage }),
     invoiceCopies: textInput('copies', b.invoiceCopies),
+    billFormat: selectInput('billFormat', BILL_FORMATS.map(([id, label]) => [String(id), label]), String(b.billFormat || 1)),
+  };
+  const billFormatDesc = h('div', { class: 'small muted' });
+  const paintBillFormatDesc = () => {
+    const f = BILL_FORMATS.find(([id]) => String(id) === i.billFormat.value);
+    billFormatDesc.textContent = f ? f[2] : '';
+  };
+  i.billFormat.addEventListener('change', paintBillFormatDesc);
+  paintBillFormatDesc();
+  const previewBillFormat = async () => {
+    try {
+      const format = Number(i.billFormat.value) || 1;
+      const previewSettings = structuredClone(store.settings);
+      previewSettings.billing.billFormat = format;
+      const doc = sampleInvoiceDoc(store);
+      await previewPdf({
+        title: 'Sample Invoice — ' + (BILL_FORMATS.find(([id]) => id === format) || [])[1],
+        fileBase: 'BizBill_Sample_Format' + format,
+        layout: format === 4 ? { width: 80, height: 1000, margin: 4, continuous: true } : undefined,
+        render: (L) => renderInvoice(L, doc, previewSettings, { paid: 0, due: doc.totals.grandTotal, status: 'unpaid' }),
+      });
+    } catch (e) { errorToast(e); }
   };
   return settingsPage(ctx, 'Billing settings', () => h('div', { class: 'form' },
+    h('div', { class: 'card form' }, h('h2', null, 'Bill Format'),
+      field('PDF / Print / JPG layout', i.billFormat), billFormatDesc,
+      h('button', { class: 'btn small', type: 'button', onclick: previewBillFormat }, icon('eye'), 'Preview this format'),
+      h('p', { class: 'small muted' }, 'Every invoice, purchase and quotation is generated in this format for PDF, print and JPG.')),
     h('div', { class: 'card form' }, h('h2', null, 'Tax'),
       h('label', { class: 'check' }, i.gstEnabled, 'GST registered (apply GST on documents)'),
       field('Default price mode', i.inclusive),
@@ -212,10 +240,31 @@ export function billingSettings(ctx) {
       defaultUnit: i.defaultUnit.value, dueDays: due || 0, currencySymbol: i.currencySymbol.value.trim(), currencyName: i.currencyName.value.trim() || 'Rupees',
       currencySubunit: i.currencySubunit.value.trim() || 'Paise', grouping: i.grouping.value, dateFormat: i.dateFormat.value,
       allowNegativeStock: i.allowNegativeStock.checked, updatePurchasePrice: i.updatePurchasePrice.checked, showHsnSummary: i.showHsnSummary.checked, showProductImage: i.showProductImage.checked,
-      invoiceCopies: i.invoiceCopies.value.trim(),
+      invoiceCopies: i.invoiceCopies.value.trim(), billFormat: Number(i.billFormat.value) || 1,
     });
     return errs;
   });
+}
+
+/** A fabricated, unsaved invoice used only to preview a Bill Format. */
+function sampleInvoiceDoc(store) {
+  const c = store.settings.company;
+  const draft = {
+    kind: 'sale',
+    party: { name: 'Sample Customer', mobile: '9876543210', gstin: c.gstin, address: 'Shop 12, Market Road', city: c.city || 'Pune', state: c.state, stateCode: c.stateCode, pincode: '411001', email: 'customer@example.com' },
+    items: [
+      { name: 'Sample Product A', hsn: '8471', qty: 2000, unit: 'PCS', rate: 50000, gstBp: 1800, discType: 'pct', disc: 500 },
+      { name: 'Sample Service B', hsn: '9983', qty: 1000, unit: 'JOB', rate: 150000, gstBp: 1800 },
+    ],
+    packaging: 5000,
+  };
+  const calc = store.computeDraft(draft);
+  return {
+    kind: 'sale', number: 'SAMPLE-0001', date: today(), dueDate: '', refNo: '', party: draft.party,
+    items: draft.items.map((it, idx) => ({ ...it, calc: calc.lines[idx] })),
+    totals: calc.totals, gst: calc.gst, inclusive: calc.inclusive, roundOff: calc.roundOff, interState: calc.interState, placeOfSupply: calc.placeOfSupply,
+    transport: {}, notes: '', terms: c.terms, paymentMethod: 'Cash', status: 'active', packaging: draft.packaging, otherCharges: 0,
+  };
 }
 
 export function appearanceSettings(ctx) {

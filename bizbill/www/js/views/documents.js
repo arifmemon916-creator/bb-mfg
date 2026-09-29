@@ -13,7 +13,7 @@ import { GST_RATES } from '../core/validate.js';
 import { STATES, stateName } from '../core/states.js';
 import { pctToBp, bpToPct, mulDivRound, paiseToInput, sum } from '../core/money.js';
 import { today, addDays, inRange } from '../core/dates.js';
-import { matches } from '../core/search.js';
+import { matches, findPartyMatch } from '../core/search.js';
 import { toCSV } from '../core/csv.js';
 import { invoiceSpec, shareMenu, runDocAction, previewPdf, reminderCardSpec } from '../docs/actions.js';
 import { saveFile } from '../platform/bridge.js';
@@ -224,6 +224,13 @@ export function docForm({ store, app }, params, query) {
     partyFields.address.value = picked.address || '';
     partyFields.stateCode.value = picked.stateCode || '';
     posSelect.value = '';
+    // Reuse the customer's saved transport details when the invoice's own
+    // transport section is still empty, so it doesn't need retyping.
+    if (picked.defaultTransport && tr.name && !tr.name.value && !tr.vehicle.value && !tr.shippingAddress.value) {
+      tr.name.value = picked.defaultTransport.name || '';
+      tr.vehicle.value = picked.defaultTransport.vehicle || '';
+      tr.shippingAddress.value = picked.defaultTransport.shippingAddress || '';
+    }
     markDirty();
     paintParty();
     recalc();
@@ -242,7 +249,14 @@ export function docForm({ store, app }, params, query) {
         h('button', { class: 'btn small', type: 'button', onclick: choosePartyFn }, 'Change')));
       if (limit && bal > limit) put(partyBox, h('div', { class: 'note warn' }, `Credit limit ${f.money(limit)} exceeded (balance ${f.money(bal)}).`));
     } else {
-      put(partyBox, h('button', { class: 'btn primary block', type: 'button', onclick: choosePartyFn }, icon('users'), 'Select ' + (partyType === 'customer' ? 'customer' : 'supplier')));
+      // Tapping the Customer/Supplier Name field opens the saved-party
+      // picker automatically (search by name, mobile or GSTIN).
+      const label = partyType === 'customer' ? 'Customer' : 'Supplier';
+      const nameField = h('button', {
+        type: 'button', class: 'input', style: { textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', color: 'var(--muted)' },
+        onclick: choosePartyFn, 'aria-label': label + ' Name, tap to select',
+      }, h('span', null, 'Tap to select ' + label.toLowerCase()), icon('search'));
+      put(partyBox, field(label + ' Name', nameField));
       if (kind !== 'purchase') put(partyBox, h('div', { style: { marginTop: '8px' } }, field('or Walk-in / cash customer', partyFields.walkin, { hint: 'Walk-in sales must be fully paid' })));
     }
   };
@@ -620,15 +634,49 @@ async function quickCreateParty(store, type, name) {
     const nameIn = textInput('name', name || '', { required: true });
     const mobile = textInput('mobile', '', { type: 'tel', inputmode: 'tel' });
     const gstin = textInput('gstin', '', { style: { textTransform: 'uppercase' }, maxlength: 15 });
+    const email = textInput('email', '', { type: 'email' });
+    const address = textArea('address', '', { rows: 2 });
+    const city = textInput('city', '');
+    const pincode = textInput('pincode', '', { inputmode: 'numeric', maxlength: 6 });
     const state = selectInput('state', [['', 'Select state'], ...STATES.map(([c, n]) => [c, `${n} (${c})`])], store.settings.company.stateCode);
+    const hint = h('div');
+    const applyMatch = (p) => {
+      mobile.value = p.mobile || mobile.value;
+      email.value = p.email || email.value;
+      gstin.value = p.gstin || gstin.value;
+      address.value = p.address || address.value;
+      city.value = p.city || city.value;
+      pincode.value = p.pincode || pincode.value;
+      if (p.stateCode) state.value = p.stateCode;
+      clear(hint);
+    };
+    const checkMatch = () => {
+      clear(hint);
+      const found = findPartyMatch(store, { gstin: gstin.value, name: nameIn.value });
+      if (!found) return;
+      put(hint, h('button', { type: 'button', class: 'note', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', border: 0, cursor: 'pointer' }, onclick: () => applyMatch(found) },
+        h('span', null, `Found saved ${found.type}: ${found.name}${found.mobile ? ' · ' + found.mobile : ''} — tap to use these details`), icon('check')));
+    };
+    gstin.addEventListener('change', checkMatch);
+    nameIn.addEventListener('change', checkMatch);
     const save = async () => {
       try {
-        const p = await store.saveParty({ type, name: nameIn.value, mobile: mobile.value, gstin: gstin.value, stateCode: state.value || gstin.value.trim().slice(0, 2), state: stateName(state.value) });
+        const p = await store.saveParty({
+          type, name: nameIn.value, mobile: mobile.value, gstin: gstin.value, email: email.value, address: address.value, city: city.value, pincode: pincode.value,
+          stateCode: state.value || gstin.value.trim().slice(0, 2), state: stateName(state.value),
+        });
         api.close(p);
       } catch (e) { errorToast(e); }
     };
     return h('div', null, h('h2', null, 'New ' + type),
-      h('div', { class: 'form' }, field('Name', nameIn, { required: true }), h('div', { class: 'row' }, field('Mobile', mobile), field('GSTIN', gstin)), field('State', state)),
+      h('div', { class: 'form' },
+        field('Name', nameIn, { required: true }),
+        h('div', { class: 'row' }, field('Mobile', mobile), field('GSTIN', gstin, { hint: 'Matches an existing saved party? Its details can be filled in automatically.' })),
+        hint,
+        field('Email', email),
+        field('Address', address),
+        h('div', { class: 'row' }, field('City', city), field('Pincode', pincode)),
+        field('State', state)),
       h('div', { class: 'btn-row' }, h('button', { class: 'btn', onclick: () => api.close(null) }, 'Cancel'), h('button', { class: 'btn primary', onclick: save }, 'Save')));
   });
 }

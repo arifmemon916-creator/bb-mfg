@@ -18,8 +18,8 @@ function fmt(settings) {
   return { m, M, d, q };
 }
 
-/** Company header block. Returns bottom y. */
-function header(L, settings, title, subtitle) {
+/** Company header block. Returns bottom y. `accent` lets bill formats recolour it. */
+function header(L, settings, title, subtitle, accent = ACCENT) {
   const c = settings.company;
   const top = L.y;
   let x = L.M;
@@ -36,7 +36,7 @@ function header(L, settings, title, subtitle) {
   const rightW = 62;
   const textW = L.W - L.M - rightW - x;
   let y = top + 5;
-  L.text(c.name || 'Your Company Name', x, y, { size: 15, style: 'bold', color: ACCENT });
+  L.text(c.name || 'Your Company Name', x, y, { size: 15, style: 'bold', color: accent });
   y += 5;
   const addr = [c.address, [c.city, c.state || stateName(c.stateCode), c.pincode].filter(Boolean).join(', ')].filter(Boolean).join('\n');
   for (const l of L.wrap(addr, textW, 8)) { L.text(l, x, y, { size: 8, color: MUTED }); y += 3.6; }
@@ -46,10 +46,10 @@ function header(L, settings, title, subtitle) {
   if (ids) { L.text(ids, x, y, { size: 8, style: 'bold' }); y += 3.6; }
 
   const rx = L.W - L.M;
-  L.text(title, rx, top + 6, { size: 14, style: 'bold', color: ACCENT, align: 'right' });
+  L.text(title, rx, top + 6, { size: 14, style: 'bold', color: accent, align: 'right' });
   if (subtitle) L.text(subtitle, rx, top + 11, { size: 7, color: MUTED, align: 'right' });
   L.y = Math.max(y, top + 22) + 2;
-  L.line(L.M, L.y, L.W - L.M, L.y, 0.5, ACCENT);
+  L.line(L.M, L.y, L.W - L.M, L.y, 0.5, accent);
   L.y += 3;
 }
 
@@ -76,14 +76,15 @@ function kvBlock(L, x, y, w, rows, size = 8) {
   return y;
 }
 
-function partyBlock(L, x, y, w, heading, p) {
-  L.text(heading, x, y, { size: 7.5, style: 'bold', color: ACCENT });
+function partyBlock(L, x, y, w, heading, p, accent = ACCENT) {
+  L.text(heading, x, y, { size: 7.5, style: 'bold', color: accent });
   y += 4;
   L.text(p.name || 'Walk-in Customer', x, y, { size: 10, style: 'bold' });
   y += 4.2;
-  const addr = [p.address, [p.city, p.state || stateName(p.stateCode)].filter(Boolean).join(', ')].filter(Boolean).join('\n');
+  const addr = [p.address, [p.city, p.state || stateName(p.stateCode), p.pincode].filter(Boolean).join(', ')].filter(Boolean).join('\n');
   for (const l of L.wrap(addr, w, 8)) { L.text(l, x, y, { size: 8, color: MUTED }); y += 3.6; }
   if (p.mobile) { L.text('Mobile: ' + p.mobile, x, y, { size: 8 }); y += 3.6; }
+  if (p.email) { L.text('Email: ' + p.email, x, y, { size: 8 }); y += 3.6; }
   if (p.gstin) { L.text('GSTIN: ' + p.gstin, x, y, { size: 8, style: 'bold' }); y += 3.6; }
   if (p.stateCode) { L.text(`State: ${stateName(p.stateCode)} (${p.stateCode})`, x, y, { size: 8 }); y += 3.6; }
   return y;
@@ -94,23 +95,46 @@ function partyBlock(L, x, y, w, heading, p) {
 const TITLES = { sale: 'TAX INVOICE', purchase: 'PURCHASE BILL', quotation: 'QUOTATION' };
 
 /**
+ * Visual bill formats (Settings → Billing → Bill Format). Every format
+ * prints the same data; only colours, borders, density and (for the
+ * thermal format) the page layout differ. See core/settings.js BILL_FORMATS.
+ */
+const INVOICE_STYLES = {
+  1: { accent: ACCENT, headFill: ACCENT, zebra: true, grid: false, compact: false },
+  2: { accent: ACCENT, headFill: ACCENT, zebra: false, grid: false, compact: true, hideHsnSummary: true },
+  3: { accent: '#222222', headFill: '#ffffff', zebra: false, grid: true, compact: false },
+  5: { accent: '#0f766e', headFill: '#0f766e', zebra: true, grid: false, compact: false, bold: true },
+  6: { accent: '#333333', headFill: '#eeeeee', zebra: false, grid: false, compact: false, plain: true },
+};
+
+function styleFor(settings) {
+  const id = Math.min(6, Math.max(1, Math.trunc(settings.billing.billFormat) || 1));
+  return { id, ...(INVOICE_STYLES[id] || INVOICE_STYLES[1]) };
+}
+
+/**
  * @param {import('./layout.js').Layout} L
  * @param {object} doc     stored document
  * @param {object} settings
  * @param {object} extra   {paid, due, status}
  */
 export function renderInvoice(L, doc, settings, extra = {}) {
+  const style = styleFor(settings);
+  if (style.id === 4) return renderThermalInvoice(L, doc, settings, extra);
   const { m, M, d, q } = fmt(settings);
   const b = settings.billing;
+  const accent = style.accent;
+  const S = { table: style.compact ? 7 : 7.5, totals: style.compact ? 8 : 8.5, gapSmall: style.compact ? 1.5 : 3, gapMed: style.compact ? 4 : 6 };
   let title = TITLES[doc.kind];
   if (doc.kind === 'sale' && !doc.gst) title = 'INVOICE';
   if (doc.status === 'cancelled') title += ' (CANCELLED)';
-  header(L, settings, title, doc.kind === 'sale' ? b.invoiceCopies : '');
+  if (style.bold) L.rect(0, 0, L.W, 4, { fill: accent }); // Modern: bold top banner
+  header(L, settings, title, doc.kind === 'sale' ? b.invoiceCopies : '', accent);
 
   const top = L.y;
   const half = (L.contentW - 6) / 2;
   const partyHeading = doc.kind === 'purchase' ? 'SUPPLIER' : 'BILL TO';
-  const yl = partyBlock(L, L.M, top + 1, half, partyHeading, doc.party);
+  const yl = partyBlock(L, L.M, top + 1, half, partyHeading, doc.party, accent);
   const noLabel = { sale: 'Invoice No.', purchase: 'Purchase No.', quotation: 'Quotation No.' }[doc.kind];
   const t = doc.transport || {};
   const yr = kvBlock(L, L.M + half + 6, top + 1, half, [
@@ -126,7 +150,7 @@ export function renderInvoice(L, doc, settings, extra = {}) {
   L.y = Math.max(yl, yr) + 1;
   if (t.shippingAddress || t.deliveryAddress) {
     const ship = t.shippingAddress || t.deliveryAddress;
-    L.text('SHIP TO / DELIVERY', L.M, L.y + 3, { size: 7.5, style: 'bold', color: ACCENT });
+    L.text('SHIP TO / DELIVERY', L.M, L.y + 3, { size: 7.5, style: 'bold', color: accent });
     L.y += 4;
     L.paragraph(ship, L.M, L.contentW, { size: 8 });
     if (t.deliveryAddress && t.shippingAddress && t.deliveryAddress !== t.shippingAddress) {
@@ -162,8 +186,8 @@ export function renderInvoice(L, doc, settings, extra = {}) {
     const t = showImg && extra.thumbs[it.productId];
     return t ? { cells: row, image: { col: 1, data: t, size: 9 } } : row;
   });
-  L.table(cols, rows, { size: 7.5 });
-  L.y += 3;
+  L.table(cols, rows, { size: S.table, headFill: style.headFill, headColor: style.plain ? '#111111' : '#ffffff', zebra: style.zebra, grid: style.grid });
+  L.y += S.gapSmall;
 
   // Totals (right) and words / tax summary / bank (left).
   const T = doc.totals;
@@ -188,27 +212,36 @@ export function renderInvoice(L, doc, settings, extra = {}) {
   const startY = L.y;
   let ty = startY + 4;
   for (const [k, v] of totalRows) {
-    L.text(k, bx + 2, ty, { size: 8.5, color: MUTED });
-    L.text(v, L.W - L.M - 2, ty, { size: 8.5, align: 'right' });
+    L.text(k, bx + 2, ty, { size: S.totals, color: MUTED });
+    L.text(v, L.W - L.M - 2, ty, { size: S.totals, align: 'right' });
     ty += 4.6;
   }
-  L.rect(bx, ty - 3, boxW, 8, { fill: ACCENT });
-  L.text('GRAND TOTAL', bx + 2, ty + 2.4, { size: 10, style: 'bold', color: '#ffffff' });
-  L.text(M(T.grandTotal), L.W - L.M - 2, ty + 2.4, { size: 10, style: 'bold', color: '#ffffff', align: 'right' });
-  ty += 9;
+  const bannerSize = style.bold ? 11 : 10;
+  if (style.plain || style.grid) {
+    L.line(bx, ty - 3, L.W - L.M, ty - 3, 0.5, accent);
+    L.text('GRAND TOTAL', bx + 2, ty + 2.4, { size: bannerSize, style: 'bold', color: '#111111' });
+    L.text(M(T.grandTotal), L.W - L.M - 2, ty + 2.4, { size: bannerSize, style: 'bold', color: '#111111', align: 'right' });
+    ty += 9;
+  } else {
+    const bannerH = style.bold ? 10 : 8;
+    L.rect(bx, ty - 3, boxW, bannerH, { fill: accent });
+    L.text('GRAND TOTAL', bx + 2, ty + bannerH - 5.6, { size: bannerSize, style: 'bold', color: '#ffffff' });
+    L.text(M(T.grandTotal), L.W - L.M - 2, ty + bannerH - 5.6, { size: bannerSize, style: 'bold', color: '#ffffff', align: 'right' });
+    ty += bannerH + 1;
+  }
   if (doc.kind !== 'quotation' && extra.paid != null && doc.status !== 'cancelled') {
-    L.text('Paid', bx + 2, ty + 1, { size: 8.5, color: MUTED });
-    L.text(m(extra.paid), L.W - L.M - 2, ty + 1, { size: 8.5, align: 'right' });
+    L.text('Paid', bx + 2, ty + 1, { size: S.totals, color: MUTED });
+    L.text(m(extra.paid), L.W - L.M - 2, ty + 1, { size: S.totals, align: 'right' });
     ty += 4.6;
-    L.text('Balance Due', bx + 2, ty + 1, { size: 8.5, style: 'bold' });
-    L.text(m(extra.due), L.W - L.M - 2, ty + 1, { size: 8.5, style: 'bold', align: 'right' });
+    L.text('Balance Due', bx + 2, ty + 1, { size: S.totals, style: 'bold' });
+    L.text(m(extra.due), L.W - L.M - 2, ty + 1, { size: S.totals, style: 'bold', align: 'right' });
     ty += 4.6;
   }
 
   // Left column.
   const lw = L.contentW - boxW - 6;
   let ly = startY + 4;
-  L.text('Amount in words', L.M, ly, { size: 7.5, style: 'bold', color: ACCENT });
+  L.text('Amount in words', L.M, ly, { size: 7.5, style: 'bold', color: accent });
   ly += 3.8;
   for (const l of L.wrap(amountInWords(T.grandTotal, b.currencyName, b.currencySubunit), lw, 8, 'bold')) { L.text(l, L.M, ly, { size: 8, style: 'bold' }); ly += 3.6; }
   ly += 1;
@@ -218,7 +251,7 @@ export function renderInvoice(L, doc, settings, extra = {}) {
   }
   L.y = Math.max(ly, ty) + 2;
 
-  if (doc.gst && b.showHsnSummary && T.taxBreakup.length) {
+  if (doc.gst && b.showHsnSummary && !style.hideHsnSummary && T.taxBreakup.length) {
     const tcols = [{ label: 'HSN/SAC', w: 0 }, { label: 'GST%', w: 14, align: 'right' }, { label: 'Taxable', w: 26, align: 'right' }];
     if (inter) tcols.push({ label: 'IGST', w: 24, align: 'right' });
     else tcols.push({ label: 'CGST', w: 22, align: 'right' }, { label: 'SGST', w: 22, align: 'right' });
@@ -229,8 +262,8 @@ export function renderInvoice(L, doc, settings, extra = {}) {
       row.push(m(r.cgst + r.sgst + r.igst));
       return row;
     });
-    L.table(tcols, trs, { size: 7, headFill: '#5b7fa6' });
-    L.y += 3;
+    L.table(tcols, trs, { size: 7, headFill: style.plain || style.grid ? '#ffffff' : '#5b7fa6', headColor: style.plain || style.grid ? '#111111' : '#ffffff', grid: style.grid });
+    L.y += S.gapSmall;
   }
 
   const c = settings.company;
@@ -241,7 +274,7 @@ export function renderInvoice(L, doc, settings, extra = {}) {
   const terms = doc.terms && doc.kind !== 'purchase' ? doc.terms : '';
   if (doc.notes) {
     L.ensure(10);
-    L.text('Notes', L.M, L.y + 3, { size: 7.5, style: 'bold', color: ACCENT });
+    L.text('Notes', L.M, L.y + 3, { size: 7.5, style: 'bold', color: accent });
     L.y += 4;
     L.paragraph(doc.notes, L.M, L.contentW, { size: 8 });
     L.y += 2;
@@ -256,14 +289,14 @@ export function renderInvoice(L, doc, settings, extra = {}) {
     const y0 = L.y;
     let by = y0 + 3;
     if (bank.length) {
-      L.text('Bank Details', L.M, by, { size: 7.5, style: 'bold', color: ACCENT });
+      L.text('Bank Details', L.M, by, { size: 7.5, style: 'bold', color: accent });
       by = kvBlock(L, L.M, by + 4, L.contentW / 2 - 4, bank, 7.5);
     }
     let ty2 = y0 + 3;
     if (terms) {
       const tx = bank.length ? L.M + L.contentW / 2 : L.M;
       const tw = bank.length ? L.contentW / 2 : L.contentW;
-      L.text('Terms & Conditions', tx, ty2, { size: 7.5, style: 'bold', color: ACCENT });
+      L.text('Terms & Conditions', tx, ty2, { size: 7.5, style: 'bold', color: accent });
       ty2 += 3.8;
       for (const l of L.wrap(terms, tw, 7.2)) { L.text(l, tx, ty2, { size: 7.2, color: MUTED }); ty2 += 3.3; }
     }
@@ -280,7 +313,7 @@ export function renderInvoice(L, doc, settings, extra = {}) {
   if (c.footer) {
     L.ensure(8);
     L.y += 2;
-    L.text(c.footer, L.W / 2, L.y + 3, { size: 8.5, style: 'bold', color: ACCENT, align: 'center' });
+    L.text(c.footer, L.W / 2, L.y + 3, { size: 8.5, style: 'bold', color: accent, align: 'center' });
     L.y += 6;
   }
   if (doc.gst) {
@@ -288,6 +321,72 @@ export function renderInvoice(L, doc, settings, extra = {}) {
     L.y += 5;
   }
   footer(L, settings);
+  return L.finalize();
+}
+
+/** Format 4: narrow continuous receipt for 80mm thermal / POS printers. */
+function renderThermalInvoice(L, doc, settings, extra = {}) {
+  const { m, M, d, q } = fmt(settings);
+  const b = settings.billing;
+  const c = settings.company;
+  const W = L.W;
+  const cx = W / 2;
+  const line = () => { L.y += 1.5; L.line(L.M, L.y, W - L.M, L.y, 0.2, '#000000'); L.y += 2.5; };
+  const center = (text, size, style) => { L.text(text, cx, L.y, { size, style, align: 'center' }); L.y += size * 0.42 + 1.2; };
+
+  L.y = L.M;
+  center(c.name || 'Your Company Name', 11, 'bold');
+  if (c.address) for (const l of L.wrap([c.address, c.city].filter(Boolean).join(', '), L.contentW, 7)) center(l, 7);
+  if (c.mobile) center('Ph: ' + c.mobile, 7);
+  if (c.gstin) center('GSTIN: ' + c.gstin, 7, 'bold');
+  line();
+  let title = TITLES[doc.kind] || 'INVOICE';
+  if (doc.status === 'cancelled') title += ' (CANCELLED)';
+  center(title, 9, 'bold');
+  L.text(doc.number, L.M, L.y, { size: 8, style: 'bold' });
+  L.text(d(doc.date), W - L.M, L.y, { size: 8, align: 'right' });
+  L.y += 4;
+  if (doc.party && doc.party.name) {
+    L.text((doc.kind === 'purchase' ? 'Supplier: ' : 'Customer: ') + doc.party.name, L.M, L.y, { size: 8, style: 'bold' });
+    L.y += 3.6;
+    if (doc.party.mobile) { L.text('Mobile: ' + doc.party.mobile, L.M, L.y, { size: 7.5 }); L.y += 3.4; }
+    if (doc.party.gstin) { L.text('GSTIN: ' + doc.party.gstin, L.M, L.y, { size: 7.5 }); L.y += 3.4; }
+  }
+  line();
+  for (const it of doc.items) {
+    const cell = it.calc;
+    for (const l of L.wrap(it.name, L.contentW, 8, 'bold')) { L.text(l, L.M, L.y, { size: 8, style: 'bold' }); L.y += 3.6; }
+    const qtyRate = `${q(it.qty)} ${it.unit || ''} x ${m(it.rate)}`;
+    L.text(qtyRate, L.M, L.y, { size: 7.5, color: MUTED });
+    L.text(m(cell.total), W - L.M, L.y, { size: 8, style: 'bold', align: 'right' });
+    L.y += 3.8;
+  }
+  line();
+  const T = doc.totals;
+  const row = (k, v, bold) => { L.text(k, L.M, L.y, { size: 8, style: bold ? 'bold' : 'normal' }); L.text(v, W - L.M, L.y, { size: 8, style: bold ? 'bold' : 'normal', align: 'right' }); L.y += 4; };
+  row('Sub Total', m(T.gross));
+  if (T.discount) row('Discount', '- ' + m(T.discount));
+  if (doc.gst) {
+    if (T.cgst) row('CGST', m(T.cgst));
+    if (T.sgst) row('SGST', m(T.sgst));
+    if (T.igst) row('IGST', m(T.igst));
+  }
+  if (T.roundOff) row('Round Off', (T.roundOff > 0 ? '+ ' : '- ') + m(Math.abs(T.roundOff)));
+  line();
+  center('GRAND TOTAL', 9, 'bold');
+  center(M(T.grandTotal), 15, 'bold');
+  if (doc.kind !== 'quotation' && extra.paid != null && doc.status !== 'cancelled' && extra.due > 0) {
+    L.y += 1;
+    row('Paid', m(extra.paid));
+    row('Balance Due', m(extra.due), true);
+  }
+  line();
+  for (const l of L.wrap(amountInWords(T.grandTotal, b.currencyName, b.currencySubunit), L.contentW, 7)) center(l, 7);
+  if (doc.notes) { L.y += 1; for (const l of L.wrap(doc.notes, L.contentW, 7)) center(l, 7); }
+  L.y += 2;
+  if (c.footer) center(c.footer, 8, 'bold');
+  center('Generated with BizBill', 6);
+  L.y += L.M;
   return L.finalize();
 }
 

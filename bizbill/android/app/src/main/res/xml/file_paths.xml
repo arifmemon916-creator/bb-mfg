@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only these cache sub-folders can ever be shared. Databases, WebView data,
+     backups (files/backups) and legacy data are NOT reachable. -->
+<paths>
+    <cache-path name="shared" path="shared/" />
+    <cache-path name="camera" path="camera/" />
+</paths>

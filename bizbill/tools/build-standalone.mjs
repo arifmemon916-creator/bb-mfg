@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const www = path.join(root, 'www');
 const esbuild = path.join(root, 'node_modules', '.bin', 'esbuild');
-const outFile = path.join(root, 'BizBill.html');
+const outFile = path.join(root, 'GrowBBPro.html');
 
 execFileSync(esbuild, [
   path.join(www, 'js', 'app.js'),
